@@ -28,7 +28,20 @@ else:
         raise RuntimeError("DATABASE_URL (or POSTGRES_HOST) must point to PostgreSQL outside explicit development mode")
     DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "db.sqlite3"}}
 
-AUTH_PASSWORD_VALIDATORS = []
+AUTH_PASSWORD_VALIDATORS = [
+    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator", "OPTIONS": {"min_length": 12}},
+    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
+    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
+]
+AUTH_MODE = os.environ.get("AUTH_MODE", "oidc").strip().lower()
+if AUTH_MODE not in {"oidc", "password_demo"}:
+    raise RuntimeError("AUTH_MODE must be either 'oidc' or 'password_demo'")
+DEMO_AUTH_SIGNING_KEY = os.environ.get("DEMO_AUTH_SIGNING_KEY", "")
+DEMO_AUTH_TOKEN_TTL_SECONDS = int(os.environ.get("DEMO_AUTH_TOKEN_TTL_SECONDS", "900"))
+if AUTH_MODE == "password_demo" and len(DEMO_AUTH_SIGNING_KEY.encode("utf-8")) < 32:
+    raise RuntimeError("DEMO_AUTH_SIGNING_KEY must be a random secret of at least 32 bytes in password_demo mode")
+if not 60 <= DEMO_AUTH_TOKEN_TTL_SECONDS <= 3600:
+    raise RuntimeError("DEMO_AUTH_TOKEN_TTL_SECONDS must be between 60 and 3600")
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
 USE_I18N = True
@@ -36,11 +49,12 @@ USE_TZ = True
 STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 REST_FRAMEWORK = {
-    "DEFAULT_AUTHENTICATION_CLASSES": ["rest_framework.authentication.SessionAuthentication", "core.authentication.OidcBearerAuthentication"],
+    "DEFAULT_AUTHENTICATION_CLASSES": ["rest_framework.authentication.SessionAuthentication", "core.authentication.MobileBearerAuthentication"],
     "DEFAULT_PERMISSION_CLASSES": ["core.permissions.TenantPermission"],
+    "DEFAULT_THROTTLE_RATES": {"password_login": "5/minute"},
 }
-# Session authentication remains available for the local dashboard bridge. Mobile/API bearer
-# requests use the OIDC adapter below; production still requires the configured OIDC provider and MFA.
+# Password-demo mode is explicitly opt-in and is not production authentication. OIDC remains
+# available by switching AUTH_MODE back to "oidc".
 OIDC_ISSUER_URL = os.environ.get("OIDC_ISSUER_URL", "")
 OIDC_DISCOVERY_URL = os.environ.get("OIDC_DISCOVERY_URL", "")
 OIDC_PUBLIC_AUTHORIZATION_ENDPOINT = os.environ.get("OIDC_PUBLIC_AUTHORIZATION_ENDPOINT", "")
@@ -76,5 +90,8 @@ CORS_ALLOW_HEADERS = (*default_headers, "x-tenant-id")
 CSRF_TRUSTED_ORIGINS = [origin for origin in os.environ.get("CSRF_TRUSTED_ORIGINS", "http://localhost:3000").split(",") if origin]
 SESSION_COOKIE_SECURE = not DEV_MODE
 CSRF_COOKIE_SECURE = not DEV_MODE
+SESSION_COOKIE_SAMESITE = "Lax" if DEV_MODE else "None"
+CSRF_COOKIE_SAMESITE = "Lax" if DEV_MODE else "None"
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SESSION_COOKIE_DOMAIN = os.environ.get("DJANGO_SESSION_COOKIE_DOMAIN") or None
 CSRF_COOKIE_DOMAIN = os.environ.get("DJANGO_CSRF_COOKIE_DOMAIN") or None

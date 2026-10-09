@@ -88,6 +88,16 @@ function BrandLogo({compact = false}) {
 }
 
 function LoginScreen({auth}) {
+  const [tenantSlug, setTenantSlug] = useState('');
+  const [employeeId, setEmployeeId] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    setBusy(true);
+    try { await auth.signIn({tenantSlug: tenantSlug.trim(), employeeId: employeeId.trim(), password}); }
+    catch (_) { /* The auth hook exposes a user-safe error message. */ }
+    finally { setBusy(false); }
+  };
   return (
     <Screen>
       <View style={styles.loginHero}>
@@ -97,11 +107,21 @@ function LoginScreen({auth}) {
         <Text style={styles.pageSubtitle}>Use your enrolled identity. The lock remains closed until the backend verifies both people.</Text>
       </View>
       <Card>
-        <Text style={styles.sectionHeading}>Secure local demonstration</Text>
-        <Text style={styles.body}>Sign-in uses Keycloak Authorization Code + PKCE. Tokens are encrypted with the Android Keystore and are never shown in the dashboard.</Text>
+        <Text style={styles.sectionHeading}>{auth.authMode === 'password_demo' ? 'Temporary demo sign-in' : 'Organization sign-in'}</Text>
+        <Text style={styles.body}>{auth.authMode === 'password_demo' ? 'Use the organization code and employee credentials assigned for this test. Your short-lived access token is stored in Android Keystore.' : 'Sign in with your organization identity provider. The lock remains closed unless the backend verifies both enrolled people.'}</Text>
         {auth.error ? <Banner tone="danger" text={auth.error} /> : null}
       </Card>
-      <Button label="Sign in with Muthoot Finance" onPress={() => auth.signIn().catch(error => {})} style={styles.pageButton} />
+      {auth.authMode === 'password_demo' ? (
+        <Card style={styles.signInCard}>
+          <TextInput value={tenantSlug} onChangeText={setTenantSlug} autoCapitalize="none" autoCorrect={false} placeholder="Organization code" placeholderTextColor={colors.textTertiary} style={styles.signInInput} accessibilityLabel="Organization code" />
+          <TextInput value={employeeId} onChangeText={setEmployeeId} autoCapitalize="characters" autoCorrect={false} placeholder="Employee ID" placeholderTextColor={colors.textTertiary} style={styles.signInInput} accessibilityLabel="Employee ID" />
+          <TextInput value={password} onChangeText={setPassword} autoCapitalize="none" autoCorrect={false} secureTextEntry placeholder="Password" placeholderTextColor={colors.textTertiary} style={styles.signInInput} accessibilityLabel="Password" />
+          <Button label={busy ? 'Signing in…' : 'Sign in'} onPress={submit} loading={busy} disabled={busy || !tenantSlug || !employeeId || !password} style={styles.pageButton} />
+          <Text style={styles.demoAuthWarning}>Password-only temporary demo mode. Not for production use.</Text>
+        </Card>
+      ) : auth.authMode === 'oidc' ? (
+        <Button label="Sign in with Muthoot Finance" onPress={() => auth.signIn().catch(() => {})} style={styles.pageButton} />
+      ) : null}
       <Text style={styles.devNote}>Local demo endpoint: {MOBILE_API_BASE_URL}</Text>
     </Screen>
   );
@@ -532,6 +552,9 @@ const styles = StyleSheet.create({
   flex: {flex: 1},
   homeHeader: {paddingHorizontal: 20, paddingTop: 24, paddingBottom: 16},
   loginHero: {alignItems: 'center', paddingHorizontal: 24, paddingTop: 42, paddingBottom: 24},
+  signInCard: {gap: 11},
+  signInInput: {minHeight: 48, borderWidth: 1, borderColor: colors.borderStrong, borderRadius: 10, paddingHorizontal: 13, color: colors.textPrimary, backgroundColor: colors.surface},
+  demoAuthWarning: {fontSize: 11, lineHeight: 16, color: colors.amberText, textAlign: 'center', marginTop: 1},
   brandLogo: {width: 230, height: 66, marginBottom: 18},
   brandLogoCompact: {width: 184, height: 48, marginBottom: 12},
   pageTitle: {paddingHorizontal: 20, paddingTop: 24, paddingBottom: 16},

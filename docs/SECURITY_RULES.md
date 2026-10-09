@@ -78,6 +78,16 @@ Every such marker must have a corresponding entry in `TODO_SECURITY_DEBT.md`. An
 remove a `SECURITY-PLACEHOLDER` marker and its real-security replacement without that being the
 explicit, stated goal of the current task.
 
+### Explicit temporary password-demo mode
+
+The user explicitly authorized a password-only sign-in option on 2026-10-09 for testing. It is
+implemented only when `AUTH_MODE=password_demo` is deliberately configured; the default remains
+OIDC. This mode omits mandatory MFA and is therefore not production authentication. Use only
+synthetic test accounts/data, never expose real customer or production lock access through it, and
+switch back to `AUTH_MODE=oidc` before any pilot or production deployment. The mode is deliberately
+marked in the UI and tracked as open security debt. Tenant membership, role checks, device status,
+and short token/session lifetimes remain enforced.
+
 ## When to stop and ask instead of proceeding
 
 - Any change to how actuation is authorized.

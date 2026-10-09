@@ -1,13 +1,14 @@
 import React, {useCallback, useEffect, useState} from 'react';
 import {Linking, NativeModules, Platform} from 'react-native';
-import {MOBILE_PUBLIC_ORIGIN} from '../config/localDemo';
+import {MOBILE_OIDC_ISSUER, MOBILE_PUBLIC_ORIGIN} from '../config/localDemo';
 
 export const MOBILE_API_BASE_URL = MOBILE_PUBLIC_ORIGIN;
-export const OIDC_ISSUER = `${MOBILE_PUBLIC_ORIGIN}/realms/access-lock`;
+export const OIDC_ISSUER = MOBILE_OIDC_ISSUER;
 export const OIDC_CLIENT_ID = 'access-lock-mobile';
 export const OIDC_REDIRECT_URI = 'accesslock://oauth/callback';
 
-const SESSION_KEY = 'oidc_session';
+const SESSION_KEY = 'access_lock_auth_session';
+const LEGACY_OIDC_SESSION_KEY = 'oidc_session';
 const PENDING_KEY = 'oidc_pending';
 const secureStore = NativeModules.AccessLockSecureStore;
 
@@ -37,17 +38,9 @@ async function exchangeCode(code, verifier) {
   const response = await fetch(`${OIDC_ISSUER}/protocol/openid-connect/token`, {
     method: 'POST',
     headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-    body: formBody({
-      grant_type: 'authorization_code',
-      client_id: OIDC_CLIENT_ID,
-      redirect_uri: OIDC_REDIRECT_URI,
-      code,
-      code_verifier: verifier,
-    }),
+    body: formBody({grant_type: 'authorization_code', client_id: OIDC_CLIENT_ID, redirect_uri: OIDC_REDIRECT_URI, code, code_verifier: verifier}),
   });
-  if (!response.ok) {
-    throw new Error(`OIDC token exchange failed (${response.status})`);
-  }
+  if (!response.ok) throw new Error(`OIDC token exchange failed (${response.status})`);
   return response.json();
 }
 
@@ -57,9 +50,7 @@ async function refreshAccessToken(refreshToken) {
     headers: {'Content-Type': 'application/x-www-form-urlencoded'},
     body: formBody({grant_type: 'refresh_token', client_id: OIDC_CLIENT_ID, refresh_token: refreshToken}),
   });
-  if (!response.ok) {
-    throw new Error(`OIDC token refresh failed (${response.status})`);
-  }
+  if (!response.ok) throw new Error(`OIDC token refresh failed (${response.status})`);
   return response.json();
 }
 
@@ -67,8 +58,17 @@ function expiresSoon(session) {
   return !session?.accessToken || !session?.accessTokenExpirationDate || Date.parse(session.accessTokenExpirationDate) < Date.now() + 60_000;
 }
 
+async function fetchAuthMode() {
+  const response = await fetch(`${MOBILE_API_BASE_URL.replace(/\/$/, '')}/api/v1/auth/config`);
+  if (!response.ok) throw new Error(`Authentication service is unavailable (${response.status})`);
+  const config = await response.json();
+  if (!['oidc', 'password_demo'].includes(config.mode)) throw new Error('The server returned an unsupported authentication mode.');
+  return config.mode;
+}
+
 export function useAccessLockAuth() {
   const [session, setSession] = useState(null);
+  const [authMode, setAuthMode] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -79,9 +79,7 @@ export function useAccessLockAuth() {
     const pending = await readJson(PENDING_KEY);
     await secureStore.removeItem(PENDING_KEY);
     if (params.get('error')) throw new Error(params.get('error_description') || params.get('error'));
-    if (!pending || params.get('state') !== pending.state || !params.get('code')) {
-      throw new Error('OIDC callback state validation failed');
-    }
+    if (!pending || params.get('state') !== pending.state || !params.get('code')) throw new Error('OIDC callback state validation failed');
     const token = await exchangeCode(params.get('code'), pending.verifier);
     const next = {
       accessToken: token.access_token,
@@ -97,9 +95,15 @@ export function useAccessLockAuth() {
 
   useEffect(() => {
     let active = true;
-    readJson(SESSION_KEY)
-      .then(value => { if (active) setSession(value); })
-      .catch(nextError => { if (active) setError(nextError.message); })
+    Promise.all([fetchAuthMode(), readJson(SESSION_KEY)])
+      .then(async ([mode, stored]) => {
+        let next = stored;
+        if (mode === 'oidc' && !next) next = await readJson(LEGACY_OIDC_SESSION_KEY);
+        if (mode === 'password_demo' && next?.idToken) next = null;
+        if (active) { setAuthMode(mode); setSession(next); }
+        if (!next) await secureStore.removeItem(SESSION_KEY);
+      })
+      .catch(nextError => { if (active) setError(nextError?.message || 'Unable to reach the authentication service.'); })
       .finally(() => { if (active) setLoading(false); });
 
     const subscription = Linking.addEventListener('url', ({url}) => {
@@ -111,32 +115,56 @@ export function useAccessLockAuth() {
     return () => { active = false; subscription.remove(); };
   }, [consumeCallback]);
 
-  const signIn = useCallback(async () => {
+  const signIn = useCallback(async ({tenantSlug, employeeId, username, password} = {}) => {
     try {
-      if (Platform.OS !== 'android') throw new Error('This local demo currently supports Android only');
-      const pkce = await secureStore.createPkce();
-      await writeJson(PENDING_KEY, pkce);
-      const params = {
-        client_id: OIDC_CLIENT_ID,
-        redirect_uri: OIDC_REDIRECT_URI,
-        response_type: 'code',
-        scope: 'openid profile email',
-        prompt: 'login',
-        code_challenge: pkce.challenge,
-        code_challenge_method: 'S256',
-        state: pkce.state,
-      };
-      await Linking.openURL(`${OIDC_ISSUER}/protocol/openid-connect/auth?${formBody(params)}`);
-    } catch (error) {
-      setError(error?.message || 'Unable to start sign-in');
-      throw error;
+      if (authMode === 'password_demo') {
+        const response = await fetch(`${MOBILE_API_BASE_URL.replace(/\/$/, '')}/api/v1/auth/mobile-login`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({tenant_slug: tenantSlug, employee_id: employeeId, username, password}),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.detail || `Sign-in failed (${response.status})`);
+        const next = {
+          accessToken: body.access_token,
+          refreshToken: '',
+          accessTokenExpirationDate: body.expires_at || new Date(Date.now() + body.expires_in * 1000).toISOString(),
+          idToken: '',
+        };
+        await writeJson(SESSION_KEY, next);
+        await secureStore.removeItem(LEGACY_OIDC_SESSION_KEY);
+        setSession(next);
+        setError('');
+        return;
+      }
+      if (authMode !== 'oidc') throw new Error('Authentication mode has not loaded yet.');
+      if (!username && !password && !tenantSlug && !employeeId) {
+        if (Platform.OS !== 'android') throw new Error('This local demo currently supports Android only');
+        const pkce = await secureStore.createPkce();
+        await writeJson(PENDING_KEY, pkce);
+        const params = {
+          client_id: OIDC_CLIENT_ID,
+          redirect_uri: OIDC_REDIRECT_URI,
+          response_type: 'code',
+          scope: 'openid profile email',
+          prompt: 'login',
+          code_challenge: pkce.challenge,
+          code_challenge_method: 'S256',
+          state: pkce.state,
+        };
+        await Linking.openURL(`${OIDC_ISSUER}/protocol/openid-connect/auth?${formBody(params)}`);
+      }
+    } catch (nextError) {
+      setError(nextError?.message || 'Unable to sign in');
+      throw nextError;
     }
-  }, []);
+  }, [authMode]);
 
   const getAccessToken = useCallback(async () => {
     let current = await readJson(SESSION_KEY);
+    if (!current) current = await readJson(LEGACY_OIDC_SESSION_KEY);
     if (!current) return '';
-    if (expiresSoon(current) && current.refreshToken) {
+    if (expiresSoon(current) && current.refreshToken && authMode === 'oidc') {
       const token = await refreshAccessToken(current.refreshToken);
       current = {
         ...current,
@@ -146,16 +174,22 @@ export function useAccessLockAuth() {
       };
       await writeJson(SESSION_KEY, current);
       setSession(current);
+    } else if (expiresSoon(current)) {
+      await secureStore.removeItem(SESSION_KEY);
+      await secureStore.removeItem(LEGACY_OIDC_SESSION_KEY);
+      setSession(null);
+      return '';
     }
     return current.accessToken;
-  }, []);
+  }, [authMode]);
 
   const signOut = useCallback(async () => {
     await secureStore.removeItem(SESSION_KEY);
+    await secureStore.removeItem(LEGACY_OIDC_SESSION_KEY);
     setSession(null);
   }, []);
 
-  return {session, loading, error, isSignedIn: Boolean(session?.accessToken), signIn, signOut, getAccessToken};
+  return {session, authMode, loading, error, isSignedIn: Boolean(session?.accessToken), signIn, signOut, getAccessToken};
 }
 
 // SECURITY-PLACEHOLDER: local demo device registration uses a Keystore-protected random fingerprint,

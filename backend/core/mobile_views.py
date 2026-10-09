@@ -9,7 +9,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .authentication import OidcBearerAuthentication
+from .authentication import MobileBearerAuthentication
 from .models import Device, EnrolledUser, Locker, LockerEnrollment, OtpChallenge, PresenceSession, UnlockRequest
 from .otp import decrypt_otp
 from .serializers import MobileDeviceRegistrationSerializer, MobileHeartbeatSerializer, MobileOtpVerifySerializer, MobilePresenceSerializer, MobileUnlockRequestSerializer, UnlockRequestSerializer
@@ -24,15 +24,27 @@ from .workflow import APPROVED_WAITING
 
 
 class MobileIdentityMixin:
-    authentication_classes = [OidcBearerAuthentication]
+    authentication_classes = [MobileBearerAuthentication]
     permission_classes = [IsAuthenticated]
 
     def identity(self, require_device=True):
-        subject = str(getattr(self.request, "oidc_claims", {}).get("sub", ""))
-        if not subject:
+        claims = getattr(self.request, "oidc_claims", {})
+        if claims.get("token_use") == "demo_mobile":
+            identity_query = EnrolledUser.objects.filter(
+                id=claims.get("mobile_identity_id"),
+                tenant_id=claims.get("tenant_id"),
+                tenant__status="active",
+                status="active",
+            )
+        else:
+            subject = str(claims.get("sub", ""))
+            if not subject:
+                return None
+            identity_query = EnrolledUser.objects.filter(oidc_subject=subject, status="active")
+        identity = identity_query.select_related("tenant").first()
+        if not identity:
             return None
-        identity = EnrolledUser.objects.filter(oidc_subject=subject, status="active").select_related("tenant").first()
-        if not identity or not require_device:
+        if not require_device:
             return identity
         device_id = self.request.headers.get("X-Device-ID", "")
         try:
