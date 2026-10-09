@@ -8,6 +8,20 @@ from core.demo_auth import mobile_login_username
 from core.models import Device, EnrolledUser, Tenant, TenantMembership
 
 
+@pytest.mark.django_db
+@override_settings(
+    AUTH_MODE="oidc",
+    OIDC_ISSUER_URL="",
+    OIDC_CLIENT_ID="",
+    DASHBOARD_URL="https://otp-access-lock.pages.dev",
+)
+def test_unconfigured_oidc_login_returns_to_deployed_dashboard():
+    response = APIClient().get("/api/v1/auth/login")
+
+    assert response.status_code == 302
+    assert response["Location"] == "https://otp-access-lock.pages.dev/login?error=oidc_not_configured"
+
+
 @pytest.fixture
 def demo_identity(db):
     tenant = Tenant.objects.create(name="Demo tenant", slug="demo-tenant")

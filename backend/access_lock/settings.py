@@ -82,7 +82,9 @@ SIGNING_PROVIDER = os.environ.get("SIGNING_PROVIDER", "kms")
 DEV_SIGNING_PRIVATE_KEY_PATH = os.environ.get("DEV_SIGNING_PRIVATE_KEY_PATH", "")
 DEV_SIGNING_KEY_ID = os.environ.get("DEV_SIGNING_KEY_ID", "local-demo")
 GRANT_TTL_SECONDS = int(os.environ.get("GRANT_TTL_SECONDS", "45"))
-DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://localhost:3000")
+DASHBOARD_URL = os.environ.get("DASHBOARD_URL") or (
+    "http://localhost:3000" if DEV_MODE else "https://otp-access-lock.pages.dev"
+)
 ALLOW_DEV_TENANT_HEADER = DEV_MODE and os.environ.get("ALLOW_DEV_TENANT_HEADER", "false").lower() == "true"
 CORS_ALLOWED_ORIGINS = [origin for origin in os.environ.get("CORS_ALLOWED_ORIGINS", "http://localhost:3000").split(",") if origin]
 CORS_ALLOW_CREDENTIALS = True
