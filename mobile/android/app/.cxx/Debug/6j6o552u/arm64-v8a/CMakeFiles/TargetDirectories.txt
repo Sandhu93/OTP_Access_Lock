@@ -1,0 +1,6 @@
+D:/ProgramData/React_native/AccessControlLock/mobile/android/app/.cxx/Debug/6j6o552u/arm64-v8a/CMakeFiles/appmodules.dir
+D:/ProgramData/React_native/AccessControlLock/mobile/android/app/.cxx/Debug/6j6o552u/arm64-v8a/CMakeFiles/edit_cache.dir
+D:/ProgramData/React_native/AccessControlLock/mobile/android/app/.cxx/Debug/6j6o552u/arm64-v8a/CMakeFiles/rebuild_cache.dir
+D:/ProgramData/React_native/AccessControlLock/mobile/android/app/.cxx/Debug/6j6o552u/arm64-v8a/BlePlx_autolinked_build/CMakeFiles/react_codegen_BlePlx.dir
+D:/ProgramData/React_native/AccessControlLock/mobile/android/app/.cxx/Debug/6j6o552u/arm64-v8a/BlePlx_autolinked_build/CMakeFiles/edit_cache.dir
+D:/ProgramData/React_native/AccessControlLock/mobile/android/app/.cxx/Debug/6j6o552u/arm64-v8a/BlePlx_autolinked_build/CMakeFiles/rebuild_cache.dir

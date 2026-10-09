@@ -1,0 +1,10 @@
+user backend
+topic write locks/+/+/commands
+topic read locks/+/+/events
+topic read locks/+/+/telemetry
+topic read locks/+/+/presence
+user lock-demo
+topic read locks/+/+/commands
+topic write locks/+/+/events
+topic write locks/+/+/telemetry
+topic write locks/+/+/presence

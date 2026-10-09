@@ -1,0 +1,9 @@
+{
+  "enabled": true,
+  "prefabPath": "D:\\ProgramData\\React_native\\AccessControlLock\\mobile\\.gradle\\caches\\modules-2\\files-2.1\\com.google.prefab\\cli\\2.1.0\\aa32fec809c44fa531f01dcfb739b5b3304d3050\\cli-2.1.0-all.jar",
+  "packages": [
+    "D:\\ProgramData\\React_native\\AccessControlLock\\mobile\\.gradle\\caches\\8.13\\transforms\\b90681c2a5d675d07a913d334de2ec05\\transformed\\react-android-0.79.7-debug\\prefab",
+    "D:\\ProgramData\\React_native\\AccessControlLock\\mobile\\.gradle\\caches\\8.13\\transforms\\c84dba0842784e07d95045a8302cd32b\\transformed\\hermes-android-0.79.7-debug\\prefab",
+    "D:\\ProgramData\\React_native\\AccessControlLock\\mobile\\.gradle\\caches\\8.13\\transforms\\ecc360991f6e72abc8ac0f2009a2f64d\\transformed\\fbjni-0.7.0\\prefab"
+  ]
+}

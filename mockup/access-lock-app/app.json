@@ -1,0 +1,25 @@
+{
+  "expo": {
+    "name": "Access Lock",
+    "slug": "access-lock",
+    "scheme": "accesslock",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "backgroundColor": "#F5F7FA",
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.enterprise.accesslock"
+    },
+    "android": {
+      "package": "com.enterprise.accesslock",
+      "adaptiveIcon": {
+        "backgroundColor": "#F5F7FA"
+      }
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}

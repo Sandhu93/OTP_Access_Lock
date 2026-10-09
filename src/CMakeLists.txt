@@ -1,0 +1,19 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "led_control.c"
+        "ble_protocol.c"
+        "ble_service.c"
+        "lock_logic.c"
+        "grant_verifier.c"
+        "device_gateway.c"
+    INCLUDE_DIRS
+        "."
+        "../include"
+    REQUIRES
+        cjson
+        mbedtls
+        esp_wifi
+        mqtt
+        nvs_flash
+)

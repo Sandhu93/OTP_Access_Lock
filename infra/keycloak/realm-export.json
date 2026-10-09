@@ -1,0 +1,101 @@
+{
+  "realm": "access-lock",
+  "enabled": true,
+  "displayName": "Access Lock Local Development",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "clients": [
+    {
+      "clientId": "access-lock-dashboard",
+      "name": "Access Lock Dashboard",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": ["http://localhost:8000/api/v1/auth/callback", "https://177.20.0.17/api/v1/auth/callback"],
+      "webOrigins": ["http://localhost:3000", "https://177.20.0.17"],
+      "attributes": {"pkce.code.challenge.method": "S256"},
+      "protocolMappers": [
+        {
+          "name": "tenant_slug",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {"user.attribute": "tenant_slug", "claim.name": "tenant_slug", "jsonType.label": "String", "id.token.claim": "true", "access.token.claim": "true", "userinfo.token.claim": "true"}
+        },
+        {
+          "name": "role",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {"user.attribute": "role", "claim.name": "role", "jsonType.label": "String", "id.token.claim": "true", "access.token.claim": "true", "userinfo.token.claim": "true"}
+        },
+        {
+          "name": "dashboard-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {"included.client.audience": "access-lock-dashboard", "id.token.claim": "false", "access.token.claim": "true", "userinfo.token.claim": "false"}
+        }
+      ]
+    },
+    {
+      "clientId": "access-lock-mobile",
+      "name": "Access Lock Mobile",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": ["accesslock://oauth/callback"],
+      "webOrigins": ["*"],
+      "attributes": {"pkce.code.challenge.method": "S256"},
+      "protocolMappers": [
+        {
+          "name": "tenant_slug",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {"user.attribute": "tenant_slug", "claim.name": "tenant_slug", "jsonType.label": "String", "id.token.claim": "true", "access.token.claim": "true", "userinfo.token.claim": "true"}
+        },
+        {
+          "name": "mobile-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {"included.client.audience": "access-lock-mobile", "id.token.claim": "false", "access.token.claim": "true", "userinfo.token.claim": "false"}
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "local.admin",
+      "enabled": true,
+      "email": "local.admin@example.test",
+      "emailVerified": true,
+      "firstName": "Local",
+      "lastName": "Administrator",
+      "attributes": {"tenant_slug": ["northstar-bank"], "role": ["admin"]},
+      "credentials": [{"type": "password", "value": "local-only-change-me", "temporary": false}]
+    },
+    {
+      "id": "00000000-0000-4000-8000-0000000000a1",
+      "username": "person.a",
+      "enabled": true,
+      "email": "person.a@example.test",
+      "emailVerified": true,
+      "firstName": "Person",
+      "lastName": "A",
+      "attributes": {"tenant_slug": ["northstar-bank"], "role": ["person"]},
+      "credentials": [{"type": "password", "value": "local-only-person-a", "temporary": false}]
+    },
+    {
+      "id": "00000000-0000-4000-8000-0000000000b1",
+      "username": "person.b",
+      "enabled": true,
+      "email": "person.b@example.test",
+      "emailVerified": true,
+      "firstName": "Person",
+      "lastName": "B",
+      "attributes": {"tenant_slug": ["northstar-bank"], "role": ["person"]},
+      "credentials": [{"type": "password", "value": "local-only-person-b", "temporary": false}]
+    }
+  ]
+}

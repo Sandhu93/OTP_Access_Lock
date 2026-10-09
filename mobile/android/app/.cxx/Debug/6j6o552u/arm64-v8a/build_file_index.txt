@@ -1,0 +1,2 @@
+D:\ProgramData\React_native\AccessControlLock\mobile\node_modules\react-native-ble-plx\android\build\generated\source\codegen\jni\CMakeLists.txt
+D:\ProgramData\React_native\AccessControlLock\mobile\node_modules\react-native\ReactAndroid\cmake-utils\default-app-setup\CMakeLists.txt

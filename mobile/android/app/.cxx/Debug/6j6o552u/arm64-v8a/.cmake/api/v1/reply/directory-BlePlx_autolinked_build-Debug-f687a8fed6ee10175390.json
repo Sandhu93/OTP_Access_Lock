@@ -1,0 +1,14 @@
+{
+	"backtraceGraph" : 
+	{
+		"commands" : [],
+		"files" : [],
+		"nodes" : []
+	},
+	"installers" : [],
+	"paths" : 
+	{
+		"build" : "BlePlx_autolinked_build",
+		"source" : "D:/ProgramData/React_native/AccessControlLock/mobile/node_modules/react-native-ble-plx/android/build/generated/source/codegen/jni"
+	}
+}

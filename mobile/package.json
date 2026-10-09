@@ -1,0 +1,31 @@
+{
+  "name": "access-lock-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "react-native start",
+    "android": "react-native run-android",
+    "build:android": "react-native build-android",
+    "test": "node --test test/*.test.js",
+    "lint:protocol": "node --check src/ble/lockProtocol.js && node --check test/lockProtocol.test.js"
+  },
+  "dependencies": {
+    "react": "19.0.0",
+    "react-native": "0.79.7",
+    "react-native-ble-plx": "^3.5.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.2",
+    "@babel/preset-env": "^7.25.3",
+    "@babel/runtime": "^7.25.0",
+    "@react-native-community/cli": "18.0.0",
+    "@react-native-community/cli-platform-android": "18.0.0",
+    "@react-native/babel-preset": "0.79.7",
+    "@react-native/metro-config": "0.79.7",
+    "@types/react": "^19.0.0",
+    "typescript": "5.0.4"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

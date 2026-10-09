@@ -1,0 +1,168 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: access_lock
+      POSTGRES_USER: access_lock
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-only-not-for-deployment}
+    volumes:
+      - access_lock_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U access_lock -d access_lock"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.3
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME:-local-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-local-only-keycloak-admin}
+      KC_HOSTNAME: ${DEMO_PUBLIC_ORIGIN:-https://localhost}
+      KC_HOSTNAME_STRICT: "false"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HTTP_ENABLED: "true"
+    volumes:
+      - ./infra/keycloak/realm-export.json:/opt/keycloak/data/import/access-lock-realm.json:ro
+    ports:
+      - "127.0.0.1:8081:8080"
+
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["cp /mosquitto/config-source/mosquitto.conf /mosquitto/config/mosquitto.conf && if [ -f /mosquitto/config-source/aclfile.local ]; then cp /mosquitto/config-source/aclfile.local /mosquitto/config/aclfile; else cp /mosquitto/config-source/aclfile /mosquitto/config/aclfile; fi && rm -rf /mosquitto/certs/* && cp -r /mosquitto/certs-source/. /mosquitto/certs/ && chown -R mosquitto:mosquitto /mosquitto/config /mosquitto/certs && chmod 0700 /mosquitto/config/aclfile && exec mosquitto -c /mosquitto/config/mosquitto.conf"]
+    volumes:
+      - ./infra/mosquitto:/mosquitto/config-source:ro
+      - ./infra/mosquitto/certs:/mosquitto/certs-source:ro
+      - mosquitto_config:/mosquitto/config
+      - mosquitto_certs:/mosquitto/certs
+    ports:
+      - "${DEMO_MQTT_BIND_ADDRESS:-127.0.0.1}:8883:8883"
+
+  api:
+    build:
+      context: ./backend
+    environment:
+      DJANGO_DEV_MODE: "1"
+      DJANGO_DEBUG: "true"
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-local-development-placeholder-only}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,api,127.0.0.1}
+      DATABASE_URL: postgresql://access_lock:${POSTGRES_PASSWORD:-local-only-not-for-deployment}@db:5432/access_lock
+      REDIS_URL: redis://redis:6379/0
+      DASHBOARD_URL: ${DEMO_PUBLIC_ORIGIN:-https://localhost}
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-https://localhost/realms/access-lock}
+      OIDC_DISCOVERY_URL: http://keycloak:8080/realms/access-lock/.well-known/openid-configuration
+      OIDC_PUBLIC_AUTHORIZATION_ENDPOINT: ${OIDC_PUBLIC_AUTHORIZATION_ENDPOINT:-https://localhost/realms/access-lock/protocol/openid-connect/auth}
+      OIDC_TOKEN_ENDPOINT: http://keycloak:8080/realms/access-lock/protocol/openid-connect/token
+      OIDC_CLIENT_ID: access-lock-dashboard
+      OIDC_AUDIENCE: access-lock-dashboard
+      OIDC_ALLOWED_AUDIENCES: access-lock-dashboard,access-lock-mobile
+      OIDC_JWKS_URL: http://keycloak:8080/realms/access-lock/protocol/openid-connect/certs
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-https://localhost/api/v1/auth/callback}
+      OIDC_REQUIRE_MFA: "false"
+      OIDC_DEFAULT_TENANT_SLUG: northstar-bank
+      OTP_DELIVERY_PROVIDER: ${OTP_DELIVERY_PROVIDER:-local}
+      OTP_ENCRYPTION_KEY: ${OTP_ENCRYPTION_KEY:-local-only-otp-envelope-key-change-me}
+      FCM_PROJECT_ID: ${FCM_PROJECT_ID:-}
+      FCM_SERVICE_ACCOUNT_FILE: ${FCM_SERVICE_ACCOUNT_FILE:-/run/secrets/fcm-service-account.json}
+      SIGNING_PROVIDER: development
+      DEV_SIGNING_PRIVATE_KEY_PATH: /dev-signing/dev-private.pem
+      DEV_SIGNING_KEY_ID: local-demo
+      GRANT_TTL_SECONDS: ${GRANT_TTL_SECONDS:-45}
+      MQTT_BROKER_URL: mqtts://mosquitto:8883
+      MQTT_CA_CERT_PATH: /mosquitto-certs/ca.crt
+      MQTT_CLIENT_CERT_PATH: /mosquitto-certs/backend.crt
+      MQTT_CLIENT_KEY_PATH: /mosquitto-certs/backend.key
+      MQTT_CLIENT_ID: backend
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://localhost}
+      CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-https://localhost}
+    volumes:
+      - ./infra/mosquitto/certs:/mosquitto-certs:ro
+      - ./infra/dev-signing:/dev-signing:ro
+    ports:
+      - "127.0.0.1:8000:8000"
+    command: ["sh", "-c", "python manage.py migrate --noinput && python manage.py bootstrap_dev && gunicorn access_lock.wsgi:application --bind 0.0.0.0:8000 --workers 2 --access-logfile -"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+      mosquitto:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/healthz', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  device-gateway:
+    build:
+      context: ./backend
+    environment:
+      DJANGO_DEV_MODE: "1"
+      DJANGO_DEBUG: "true"
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-local-development-placeholder-only}
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,api,device-gateway
+      DATABASE_URL: postgresql://access_lock:${POSTGRES_PASSWORD:-local-only-not-for-deployment}@db:5432/access_lock
+      MQTT_BROKER_URL: mqtts://mosquitto:8883
+      MQTT_CA_CERT_PATH: /mosquitto-certs/ca.crt
+      MQTT_CLIENT_CERT_PATH: /mosquitto-certs/backend.crt
+      MQTT_CLIENT_KEY_PATH: /mosquitto-certs/backend.key
+      MQTT_CLIENT_ID: device-gateway
+    volumes:
+      - ./infra/mosquitto/certs:/mosquitto-certs:ro
+    command: ["sh", "-c", "python manage.py migrate --noinput && python manage.py mqtt_consumer"]
+    depends_on:
+      db:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile.local
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-https://localhost}
+    environment:
+      NODE_ENV: production
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  edge:
+    image: accesscontrollock-api
+    command: ["python", "/edge/edge_proxy.py"]
+    environment:
+      DEMO_PUBLIC_HOST: ${DEMO_HOST_IP:-localhost}
+    volumes:
+      - ./infra/edge/edge_proxy.py:/edge/edge_proxy.py:ro
+      - ./infra/edge/certs:/edge-certs:ro
+    ports:
+      - "${DEMO_HTTPS_BIND_ADDRESS:-127.0.0.1}:443:443"
+    depends_on:
+      api:
+        condition: service_healthy
+      dashboard:
+        condition: service_started
+      keycloak:
+        condition: service_started
+
+volumes:
+  access_lock_db:
+  mosquitto_config:
+  mosquitto_certs:

@@ -1,0 +1,7 @@
+#ifndef MVP_CONFIG_H
+#define MVP_CONFIG_H
+
+#define MVP_BACKEND_TOKEN_REQUIRED 1
+#define MVP_RFID_NFC_ENABLED 0
+
+#endif
