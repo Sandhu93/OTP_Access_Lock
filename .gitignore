@@ -24,6 +24,7 @@ backend/__pycache__
 backend/**/__pycache__
 dashboard/node_modules
 dashboard/.next
+dashboard/out
 .env
 infra/mosquitto/certs/*
 !infra/mosquitto/certs/.gitkeep
