@@ -2,7 +2,7 @@ from django.urls import path
 from rest_framework.routers import DefaultRouter
 
 from .views import AuditLogViewSet, DeviceViewSet, HealthView, LockerViewSet, OverviewView, PolicyViewSet, SecurityAlertViewSet, SiteViewSet, UnlockRequestViewSet, UserViewSet
-from .auth_views import AuthMeView, CsrfView, LogoutView, OidcCallbackView, OidcLoginView
+from .auth_views import AuthMeView, AuthModeView, CsrfView, LogoutView, MobilePasswordLoginView, OidcCallbackView, OidcLoginView, PasswordLoginView
 from .mobile_views import MobileDeviceRegistrationView, MobileOtpChallengeView, MobileOtpChallengeVerifyView, MobilePresenceHeartbeatView, MobilePresenceSessionDetailView, MobilePresenceSessionView, MobileUnlockRequestDetailView, MobileUnlockRequestView
 
 
@@ -20,8 +20,11 @@ urlpatterns = [
     path("healthz", HealthView.as_view(), name="healthz"),
     path("auth/login", OidcLoginView.as_view(), name="oidc-login"),
     path("auth/callback", OidcCallbackView.as_view(), name="oidc-callback"),
+    path("auth/config", AuthModeView.as_view(), name="auth-config"),
     path("auth/me", AuthMeView.as_view(), name="auth-me"),
     path("auth/csrf", CsrfView.as_view(), name="auth-csrf"),
+    path("auth/password-login", PasswordLoginView.as_view(), name="password-login"),
+    path("auth/mobile-login", MobilePasswordLoginView.as_view(), name="mobile-password-login"),
     path("auth/logout", LogoutView.as_view(), name="auth-logout"),
     path("mobile/devices/register", MobileDeviceRegistrationView.as_view(), name="mobile-device-register"),
     path("mobile/presence-sessions", MobilePresenceSessionView.as_view(), name="mobile-presence-create"),

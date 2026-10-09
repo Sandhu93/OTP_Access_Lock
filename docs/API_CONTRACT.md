@@ -22,6 +22,28 @@ clients can distinguish approval, expiry, and OTP lockout states.
 All production routes require authenticated identity and explicit tenant membership. A development
 tenant header must never be accepted in a production deployment.
 
+## Authentication mode
+
+`GET /api/v1/auth/config` returns the configured mode (`oidc` or `password_demo`). OIDC remains the
+default. The temporary password mode is enabled only by setting `AUTH_MODE=password_demo` and
+providing `DEMO_AUTH_SIGNING_KEY` through a secret manager; it is not production authentication.
+Dashboard password sign-in creates a Django session and requires CSRF protection. Mobile password
+sign-in requires an active tenant, active enrolled employee ID, and a provisioned account; it returns
+a no-store bearer token with a maximum one-hour lifetime (default 15 minutes). Password login is
+throttled. Mobile bearer requests re-check account/enrollment status, and all existing device and
+tenant authorization checks still apply.
+
+```text
+POST /api/v1/auth/password-login  # dashboard only, password_demo mode
+POST /api/v1/auth/mobile-login   # mobile only, password_demo mode
+GET  /api/v1/auth/me
+GET  /api/v1/auth/csrf
+POST /api/v1/auth/logout
+```
+
+Set demo account passwords interactively with `python manage.py set_demo_password`; never pass
+passwords as command-line arguments or commit them.
+
 ## Admin endpoints
 
 ```text
@@ -64,8 +86,9 @@ GET    /api/v1/mobile/otp-challenges/{challenge_id}
 POST   /api/v1/mobile/otp-challenges/{challenge_id}/verify
 ```
 
-The local profile now validates OIDC bearer tokens and supports device registration, unlock-request
-creation, participant presence sessions, heartbeats, and OTP verification. Mobile requests after
+The OIDC profile validates OIDC bearer tokens and supports device registration, unlock-request
+creation, participant presence sessions, heartbeats, and OTP verification. In password-demo mode,
+mobile sign-in instead uses short-lived backend-issued bearer tokens. Mobile requests after
 registration must send the active `X-Device-ID`; revoked devices are rejected. The challenge GET
 decrypts the backend envelope only for the authenticated second-party device and returns the OTP to
 that mobile client over the authenticated TLS API. It never appears in FCM metadata, the dashboard,

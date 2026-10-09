@@ -2,6 +2,7 @@ const configuredApiBase = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, '
 
 export type AuthMembership = {tenant_id: string; tenant_name: string; role: string};
 export type AuthMe = {authenticated: boolean; user?: {id: number; email: string; name: string}; memberships?: AuthMembership[]};
+export type AuthConfig = {mode: 'oidc' | 'password_demo'};
 export type ApiOverview = {tenant: {id: string; name: string}; lockers: {total: number; online: number; attention: number}; requests: {pending_review: number; active: number}};
 export type ApiUnlockRequest = {
   id: string; locker: string; locker_name: string; site_name: string; requester: string; requester_name: string;
@@ -15,14 +16,11 @@ export type ApiDevice = {id: string; user: string; user_name: string; platform: 
 export type ApiAuditEvent = {id: string; actor_type: string; actor_id: string; event_type: string; request_id: string | null; details: Record<string, unknown>; created_at: string};
 export type ApiAlert = {id: string; locker: string | null; severity: string; category: string; message: string; acknowledged_at: string | null; created_at: string};
 
-function readCookie(name: string) {
-  if (typeof document === 'undefined') return '';
-  return document.cookie.split('; ').find((entry) => entry.startsWith(`${name}=`))?.split('=').slice(1).join('=') ?? '';
-}
-
 async function csrfToken() {
-  await fetch(`${configuredApiBase}/api/v1/auth/csrf`, {credentials: 'include'});
-  return decodeURIComponent(readCookie('csrftoken'));
+  const response = await fetch(`${configuredApiBase}/api/v1/auth/csrf`, {credentials: 'include'});
+  if (!response.ok) throw new Error('Could not initialize secure sign-in. Refresh and try again.');
+  const body = await response.json() as {csrfToken?: string};
+  return body.csrfToken ?? '';
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -51,7 +49,12 @@ function tenantHeaders(tenantId: string): HeadersInit {
 }
 
 export const dashboardApi = {
+  getAuthConfig: () => request<AuthConfig>('/api/v1/auth/config'),
   getAuthMe: () => request<AuthMe>('/api/v1/auth/me'),
+  passwordLogin: (username: string, password: string) => request<{authenticated: boolean}>(
+    '/api/v1/auth/password-login', {method: 'POST', body: JSON.stringify({username, password})},
+  ),
+  logout: () => request<{authenticated: boolean}>('/api/v1/auth/logout', {method: 'POST', body: JSON.stringify({})}),
   getOverview: (tenantId: string) => request<ApiOverview>('/api/v1/admin/overview', {headers: tenantHeaders(tenantId)}),
   getRequests: (tenantId: string) => request<ApiUnlockRequest[]>('/api/v1/admin/unlock-requests/', {headers: tenantHeaders(tenantId)}),
   getLockers: (tenantId: string) => request<ApiLocker[]>('/api/v1/admin/lockers/', {headers: tenantHeaders(tenantId)}),

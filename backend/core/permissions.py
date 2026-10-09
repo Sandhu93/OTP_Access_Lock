@@ -42,7 +42,7 @@ class CanManageInventory(BasePermission):
 def tenant_for_request(request):
     if not request.user or not request.user.is_authenticated:
         return None
-    memberships = TenantMembership.objects.filter(admin_user=request.user, active=True).select_related("tenant")
+    memberships = TenantMembership.objects.filter(admin_user=request.user, active=True, tenant__status="active").select_related("tenant")
     requested = request.headers.get("X-Tenant-Id") or request.headers.get("X-Tenant-ID")
     if requested:
         membership = memberships.filter(tenant_id=requested).first()
