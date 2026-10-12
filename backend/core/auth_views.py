@@ -115,7 +115,10 @@ class AuthModeView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        return Response({"mode": settings.AUTH_MODE})
+        return Response({
+            "mode": settings.AUTH_MODE,
+            "demo_dashboard_otp_enabled": settings.AUTH_MODE == "password_demo" and settings.DEMO_DASHBOARD_OTP_ENABLED,
+        })
 
 
 @method_decorator(csrf_protect, name="dispatch")

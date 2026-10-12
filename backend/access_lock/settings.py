@@ -77,6 +77,7 @@ MQTT_PASSWORD = os.environ.get("MQTT_PASSWORD", "")
 MQTT_CLIENT_ID = os.environ.get("MQTT_CLIENT_ID", "backend")
 OTP_DELIVERY_PROVIDER = os.environ.get("OTP_DELIVERY_PROVIDER", "")
 OTP_ENCRYPTION_KEY = os.environ.get("OTP_ENCRYPTION_KEY", "")
+DEMO_DASHBOARD_OTP_ENABLED = os.environ.get("DEMO_DASHBOARD_OTP_ENABLED", "false").lower() in {"1", "true", "yes"}
 FCM_PROJECT_ID = os.environ.get("FCM_PROJECT_ID", "")
 FCM_SERVICE_ACCOUNT_FILE = os.environ.get("FCM_SERVICE_ACCOUNT_FILE", "")
 DEV_SIGNING_SECRET = os.environ.get("DEV_SIGNING_SECRET", "")

@@ -2,7 +2,7 @@ const configuredApiBase = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, '
 
 export type AuthMembership = {tenant_id: string; tenant_name: string; role: string};
 export type AuthMe = {authenticated: boolean; user?: {id: number; email: string; name: string}; memberships?: AuthMembership[]};
-export type AuthConfig = {mode: 'oidc' | 'password_demo'};
+export type AuthConfig = {mode: 'oidc' | 'password_demo'; demo_dashboard_otp_enabled?: boolean};
 export type ApiOverview = {tenant: {id: string; name: string}; lockers: {total: number; online: number; attention: number}; requests: {pending_review: number; active: number}};
 export type ApiUnlockRequest = {
   id: string; locker: string; locker_name: string; site_name: string; requester: string; requester_name: string;
@@ -57,6 +57,7 @@ export const dashboardApi = {
   logout: () => request<{authenticated: boolean}>('/api/v1/auth/logout', {method: 'POST', body: JSON.stringify({})}),
   getOverview: (tenantId: string) => request<ApiOverview>('/api/v1/admin/overview', {headers: tenantHeaders(tenantId)}),
   getRequests: (tenantId: string) => request<ApiUnlockRequest[]>('/api/v1/admin/unlock-requests/', {headers: tenantHeaders(tenantId)}),
+  getDemoOtp: (tenantId: string, requestId: string) => request<{otp: string; expires_at: string}>(`/api/v1/admin/unlock-requests/${requestId}/demo-otp/`, {headers: tenantHeaders(tenantId)}),
   getLockers: (tenantId: string) => request<ApiLocker[]>('/api/v1/admin/lockers/', {headers: tenantHeaders(tenantId)}),
   getSites: (tenantId: string) => request<ApiSite[]>('/api/v1/admin/sites/', {headers: tenantHeaders(tenantId)}),
   getUsers: (tenantId: string) => request<ApiUser[]>('/api/v1/admin/users/', {headers: tenantHeaders(tenantId)}),
