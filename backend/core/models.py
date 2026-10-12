@@ -75,7 +75,7 @@ class EnrolledUser(models.Model):
 
 
 class Device(models.Model):
-    STATUS_CHOICES = [("pending", "Pending"), ("active", "Active"), ("revoked", "Revoked")]
+    STATUS_CHOICES = [("pending", "Pending"), ("active", "Active"), ("rejected", "Rejected"), ("revoked", "Revoked")]
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="devices")
     user = models.ForeignKey(EnrolledUser, on_delete=models.PROTECT, related_name="devices")
@@ -85,6 +85,10 @@ class Device(models.Model):
     push_token = models.CharField(max_length=4096, blank=True)
     status = models.CharField(max_length=16, choices=STATUS_CHOICES, default="pending")
     last_seen_at = models.DateTimeField(null=True, blank=True)
+    enrollment_requested_at = models.DateTimeField(auto_now_add=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="reviewed_mobile_devices")
+    review_reason = models.TextField(blank=True)
     revoked_at = models.DateTimeField(null=True, blank=True)
 
 

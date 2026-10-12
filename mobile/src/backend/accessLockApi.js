@@ -34,6 +34,7 @@ export function createAccessLockApi({baseUrl = DEFAULT_API_BASE_URL, getAccessTo
 
   return {
     registerDevice: (payload) => request('/api/v1/mobile/devices/register', {method: 'POST', body: JSON.stringify(payload)}),
+    getDeviceEnrollmentStatus: (deviceId) => request(`/api/v1/mobile/devices/${deviceId}/enrollment-status`),
     createUnlockRequest: (payload) => request('/api/v1/mobile/unlock-requests', {method: 'POST', body: JSON.stringify(payload)}),
     listUnlockRequests: () => request('/api/v1/mobile/unlock-requests'),
     getUnlockRequest: (requestId) => request(`/api/v1/mobile/unlock-requests/${requestId}`),

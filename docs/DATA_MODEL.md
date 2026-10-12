@@ -48,6 +48,7 @@ The explicit relationship between an OIDC-authenticated admin identity and a ten
 ### Device (phone)
 The hardware-backed identity bound to a `User` during enrollment.
 - `device_id`, `user_id`
+- `enrollment_requested_at`, `reviewed_at`, `reviewed_by`, `review_reason`
 - `public_key` / `attestation` reference (hardware-backed keystore key, not a session token)
 - `enrollment_status` — pending admin approval / active / revoked
 - `enrollment_history` — re-enrollment events, each requiring the other trusted party's

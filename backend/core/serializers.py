@@ -56,8 +56,12 @@ class DeviceSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Device
-        fields = ["id", "user", "user_name", "platform", "public_key_fingerprint", "status", "last_seen_at", "revoked_at"]
-        read_only_fields = ["id", "public_key_fingerprint", "last_seen_at", "revoked_at"]
+        fields = ["id", "user", "user_name", "platform", "status", "last_seen_at", "enrollment_requested_at", "reviewed_at", "review_reason", "revoked_at"]
+        read_only_fields = fields
+
+
+class DeviceReviewSerializer(serializers.Serializer):
+    reason = serializers.CharField(min_length=3, max_length=2000)
 
 
 class UnlockRequestSerializer(serializers.ModelSerializer):

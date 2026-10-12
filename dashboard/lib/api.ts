@@ -12,7 +12,7 @@ export type ApiUnlockRequest = {
 export type ApiLocker = {id: string; name: string; hardware_id: string; site: string; site_name: string; status: string; last_seen_at: string | null; firmware_version: string; policy?: {required_count: number; enrolled_count: number}};
 export type ApiSite = {id: string; name: string; region: string; status: string};
 export type ApiUser = {id: string; display_name: string; employee_id: string; title: string; status: string; created_at: string};
-export type ApiDevice = {id: string; user: string; user_name: string; platform: string; status: string; last_seen_at: string | null; revoked_at: string | null};
+export type ApiDevice = {id: string; user: string; user_name: string; platform: string; status: string; last_seen_at: string | null; enrollment_requested_at: string; reviewed_at: string | null; review_reason: string; revoked_at: string | null};
 export type ApiAuditEvent = {id: string; actor_type: string; actor_id: string; event_type: string; request_id: string | null; details: Record<string, unknown>; created_at: string};
 export type ApiAlert = {id: string; locker: string | null; severity: string; category: string; message: string; acknowledged_at: string | null; created_at: string};
 
@@ -73,4 +73,6 @@ export const dashboardApi = {
   ),
   revokeUser: (tenantId: string, userId: string) => request<ApiUser>(`/api/v1/admin/users/${userId}/revoke/`, {method: 'POST', headers: tenantHeaders(tenantId), body: JSON.stringify({})}),
   revokeDevice: (tenantId: string, deviceId: string) => request<ApiDevice>(`/api/v1/admin/devices/${deviceId}/revoke/`, {method: 'POST', headers: tenantHeaders(tenantId), body: JSON.stringify({})}),
+  approveDevice: (tenantId: string, deviceId: string, reason: string) => request<ApiDevice>(`/api/v1/admin/devices/${deviceId}/approve/`, {method: 'POST', headers: tenantHeaders(tenantId), body: JSON.stringify({reason})}),
+  rejectDevice: (tenantId: string, deviceId: string, reason: string) => request<ApiDevice>(`/api/v1/admin/devices/${deviceId}/reject/`, {method: 'POST', headers: tenantHeaders(tenantId), body: JSON.stringify({reason})}),
 };
