@@ -66,6 +66,11 @@ Mosquitto mTLS listener at `mqtts://localhost:8883`. To enable FCM delivery, pro
 service-account JSON outside the repository and set `FCM_PROJECT_ID` and
 `FCM_SERVICE_ACCOUNT_FILE`; the adapter sends only a challenge ID and expiry event, never the OTP.
 
+  For a controlled password-demo environment only, `DEMO_DASHBOARD_OTP_ENABLED=true` adds a
+  dashboard action to reveal the OTP. It is available only while the request is approved and both
+  people have fresh locker-presence heartbeats, and every reveal is audit logged. Keep this false
+  in production; the setting is also ignored unless `AUTH_MODE=password_demo`.
+
 ## Local setup
 
 ```powershell
@@ -84,3 +89,4 @@ python manage.py runserver
 The project uses SQLite only in explicit development mode. Set `DATABASE_URL` to PostgreSQL and
 provide `DJANGO_SECRET_KEY` in any shared or deployed environment. No production secret belongs
 in this repository.
+

@@ -139,6 +139,7 @@ def test_mobile_password_login_rejects_wrong_tenant_or_password(demo_identity):
 def test_password_routes_are_closed_when_oidc_mode_is_selected():
     cache.clear()
     client = APIClient()
-    assert client.get("/api/v1/auth/config").json() == {"mode": "oidc"}
+    assert client.get("/api/v1/auth/config").json() == {"mode": "oidc", "demo_dashboard_otp_enabled": False}
     assert client.post("/api/v1/auth/password-login", {}, format="json").status_code == 404
     assert client.post("/api/v1/auth/mobile-login", {}, format="json").status_code == 404
+
