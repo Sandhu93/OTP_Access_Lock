@@ -1,3 +1,6 @@
+from datetime import timedelta
+
+from django.conf import settings
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -7,11 +10,13 @@ from django.utils import timezone
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 
-from .models import AuditLogEntry, Device, EnrolledUser, Locker, LockerPolicy, SecurityAlert, Site, UnlockRequest
+from .models import AuditLogEntry, Device, EnrolledUser, Locker, LockerPolicy, OtpChallenge, PresenceSession, SecurityAlert, Site, UnlockRequest
 from .permissions import CanManageInventory, CanReviewUnlockRequest, TenantPermission, tenant_for_request
 from .providers import ProviderNotConfigured, get_mobile_delivery_provider
 from .serializers import AuditLogEntrySerializer, DeviceReviewSerializer, DeviceSerializer, EnrolledUserSerializer, LockerPolicySerializer, LockerSerializer, ReviewSerializer, SecurityAlertSerializer, SiteSerializer, UnlockRequestSerializer
-from .services import EXPIRABLE_REQUEST_STATUSES, WorkflowError, approve_unlock_request, expire_unlock_request_if_needed, reject_unlock_request
+from .services import EXPIRABLE_REQUEST_STATUSES, WorkflowError, _audit, approve_unlock_request, expire_unlock_request_if_needed, reject_unlock_request
+from .otp import decrypt_otp
+from .workflow import APPROVED_WAITING
 
 
 class TenantScopedMixin:
@@ -139,7 +144,7 @@ class UnlockRequestViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
     serializer_class = UnlockRequestSerializer
 
     def get_permissions(self):
-        return [CanReviewUnlockRequest()] if self.action in ["approve", "reject"] else super().get_permissions()
+        return [CanReviewUnlockRequest()] if self.action in ["approve", "reject", "demo_otp"] else super().get_permissions()
 
     def get_queryset(self):
         queryset = self.scoped_queryset(UnlockRequest.objects.select_related("locker", "requester", "second_party").order_by("-requested_at"))
@@ -172,6 +177,37 @@ class UnlockRequestViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
     def reject(self, request, *args, **kwargs):
         return self._review(request, approve=False)
 
+    @action(detail=True, methods=["get"], url_path="demo-otp")
+    def demo_otp(self, request, *args, **kwargs):
+        if settings.AUTH_MODE != "password_demo" or not settings.DEMO_DASHBOARD_OTP_ENABLED:
+            return Response({"detail": "Dashboard OTP reveal is disabled."}, status=status.HTTP_404_NOT_FOUND)
+        unlock_request = self.get_object()
+        if unlock_request.status != APPROVED_WAITING:
+            return Response({"detail": "OTP is available only for an approved, active request."}, status=status.HTTP_409_CONFLICT)
+        challenge = OtpChallenge.objects.filter(request=unlock_request).first()
+        if not challenge or challenge.delivery_status != "delivered":
+            return Response({"detail": "OTP challenge is not ready."}, status=status.HTTP_409_CONFLICT)
+        now = timezone.now()
+        if challenge.expires_at <= now:
+            return Response({"detail": "OTP challenge has expired."}, status=status.HTTP_410_GONE)
+        fresh_presence = PresenceSession.objects.filter(
+            request=unlock_request,
+            locker_id=unlock_request.locker_id,
+            ended_at__isnull=True,
+            last_heartbeat_at__gte=now - timedelta(seconds=30),
+        )
+        if not fresh_presence.filter(user_id=unlock_request.requester_id).exists() or not fresh_presence.filter(user_id=unlock_request.second_party_id).exists():
+            return Response({"detail": "Both people must be connected to the locker before revealing the demo OTP."}, status=status.HTTP_409_CONFLICT)
+        try:
+            otp = decrypt_otp(challenge.otp_ciphertext)
+        except ValueError:
+            return Response({"detail": "OTP envelope is unavailable."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        _audit(unlock_request.tenant, request.user, "demo.otp_revealed", unlock_request.id, {"challenge_id": str(challenge.id)})
+        response = Response({"otp": otp, "expires_at": challenge.expires_at})
+        response["Cache-Control"] = "no-store, no-cache, must-revalidate, private"
+        response["Pragma"] = "no-cache"
+        return response
+
 
 class OverviewView(TenantScopedMixin, APIView):
     def get(self, request):
@@ -202,3 +238,4 @@ class HealthView(APIView):
 
     def get(self, request):
         return Response({"status": "ok", "service": "access-lock-api"})
+
