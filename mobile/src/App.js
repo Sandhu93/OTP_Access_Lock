@@ -42,6 +42,7 @@ const FAILURE_COPY = {
   personADisconnected: ['Requester disconnected', 'Person A’s active connection was lost during verification.', 'Retry'],
   backendUnavailable: ['Service unavailable', 'The authorization service could not be reached. The locker remains locked.', 'Try again'],
   requestNotApproved: ['Waiting for approval', 'The administrator has not approved this request yet. The locker remains locked.', 'Back to Lockers'],
+  presenceRequired: ['Reconnect both people', 'Both phones must keep a fresh connection to the assigned locker through OTP verification.', 'Reconnect'],
   otpLockedOut: ['OTP locked out', 'Too many incorrect codes were entered. The administrator has been alerted.', 'Back to Lockers'],
   authorizationDenied: ['Authorization denied', 'The backend did not issue authorization for this request.', 'Back to Lockers'],
   lockerResetCancelled: ['Request cancelled', 'This access request is no longer active.', 'Back to Lockers'],
@@ -53,6 +54,7 @@ function isLiveApprovedRequest(request) {
 
 function otpFailureType(error) {
   if (error?.errorCode === 'challenge_expired' || error?.errorCode === 'request_not_approved') return error.errorCode === 'challenge_expired' ? 'requestExpired' : 'requestNotApproved';
+  if (error?.errorCode === 'second_party_presence_required' || error?.errorCode === 'both_party_presence_required') return 'presenceRequired';
   if (error?.errorCode === 'otp_locked_out') return 'otpLockedOut';
   if (error?.errorCode === 'otp_invalid') return 'authorizationDenied';
   return error?.status === 400 ? 'authorizationDenied' : 'backendUnavailable';
@@ -88,13 +90,26 @@ function BrandLogo({compact = false}) {
 }
 
 function LoginScreen({auth}) {
+  const {getSavedPasswordCredentials, clearSavedPasswordCredentials} = auth;
   const [tenantSlug, setTenantSlug] = useState('');
   const [employeeId, setEmployeeId] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberCredentials, setRememberCredentials] = useState(false);
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let active = true;
+    getSavedPasswordCredentials().then(saved => {
+      if (!active || !saved) return;
+      setTenantSlug(saved.tenantSlug || '');
+      setEmployeeId(saved.employeeId || '');
+      setPassword(saved.password || '');
+      setRememberCredentials(true);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [getSavedPasswordCredentials]);
   const submit = async () => {
     setBusy(true);
-    try { await auth.signIn({tenantSlug: tenantSlug.trim(), employeeId: employeeId.trim(), password}); }
+    try { await auth.signIn({tenantSlug: tenantSlug.trim(), employeeId: employeeId.trim(), password, rememberCredentials}); }
     catch (_) { /* The auth hook exposes a user-safe error message. */ }
     finally { setBusy(false); }
   };
@@ -116,6 +131,26 @@ function LoginScreen({auth}) {
           <TextInput value={tenantSlug} onChangeText={setTenantSlug} autoCapitalize="none" autoCorrect={false} placeholder="Organization code" placeholderTextColor={colors.textTertiary} style={styles.signInInput} accessibilityLabel="Organization code" />
           <TextInput value={employeeId} onChangeText={setEmployeeId} autoCapitalize="characters" autoCorrect={false} placeholder="Employee ID" placeholderTextColor={colors.textTertiary} style={styles.signInInput} accessibilityLabel="Employee ID" />
           <TextInput value={password} onChangeText={setPassword} autoCapitalize="none" autoCorrect={false} secureTextEntry placeholder="Password" placeholderTextColor={colors.textTertiary} style={styles.signInInput} accessibilityLabel="Password" />
+          <Pressable
+            accessibilityRole="checkbox"
+            accessibilityState={{checked: rememberCredentials}}
+            onPress={async () => {
+              if (rememberCredentials) {
+                await clearSavedPasswordCredentials();
+                setTenantSlug('');
+                setEmployeeId('');
+                setPassword('');
+                setRememberCredentials(false);
+              } else {
+                setRememberCredentials(true);
+              }
+            }}
+            style={styles.rememberRow}>
+            <View style={[styles.rememberBox, rememberCredentials && styles.rememberBoxChecked]}>
+              {rememberCredentials ? <Text style={styles.rememberCheck}>✓</Text> : null}
+            </View>
+            <Text style={styles.body}>Remember credentials on this phone</Text>
+          </Pressable>
           <Button label={busy ? 'Signing in…' : 'Sign in'} onPress={submit} loading={busy} disabled={busy || !tenantSlug || !employeeId || !password} style={styles.pageButton} />
           <Text style={styles.demoAuthWarning}>Password-only temporary demo mode. Not for production use.</Text>
         </Card>
@@ -233,19 +268,53 @@ function ConnectedScreen({ble, role, sessionIdValue, onBack, onRequest, onFailur
   );
 }
 
-function AccessRequestScreen({ble, onBack, onSubmit}) {
+function AccessRequestScreen({ble, api, onBack, onSubmit}) {
   const [reason, setReason] = useState('Secure document retrieval');
+  const [secondParties, setSecondParties] = useState([]);
+  const [secondPartyId, setSecondPartyId] = useState('');
+  const [loadingSecondParties, setLoadingSecondParties] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const reasons = ['Secure document retrieval', 'Cash or instrument handling', 'Other controlled access'];
+  useEffect(() => {
+    let active = true;
+    api.getEligibleSecondParties(LOCKER_ID).then(eligible => {
+      if (!active) return;
+      setSecondParties(eligible);
+      if (eligible.length === 1) setSecondPartyId(eligible[0].id);
+    }).catch(nextError => {
+      if (active) setError(nextError.message);
+    }).finally(() => {
+      if (active) setLoadingSecondParties(false);
+    });
+    return () => { active = false; };
+  }, [api]);
   return (
     <Screen>
       <TopBar title="Access request" onBack={onBack} eyebrow="Person A · Request access" />
-      <PageTitle title="Why do you need access?" subtitle="The administrator will review this reason before the second person is invited." />
+      <PageTitle title="Why do you need access?" subtitle="Choose the enrolled colleague who will confirm presence after administrator approval. They do not need to be connected yet." />
       <Card>{reasons.map(option => <Pressable key={option} onPress={() => setReason(option)} style={[styles.option, reason === option && styles.selectedOption]}><View style={[styles.radio, reason === option && styles.selectedRadio]} /><Text style={styles.optionText}>{option}</Text></Pressable>)}</Card>
+      {secondParties.length > 1 ? (
+        <Card>
+          <Text style={styles.sectionHeading}>Second person</Text>
+          {secondParties.map(person => (
+            <Pressable key={person.id} onPress={() => setSecondPartyId(person.id)} style={[styles.option, secondPartyId === person.id && styles.selectedOption]}>
+              <View style={[styles.radio, secondPartyId === person.id && styles.selectedRadio]} />
+              <View style={styles.secondPartyLabel}>
+                <Text style={styles.optionText}>{person.display_name}</Text>
+                <Text style={styles.muted}>{person.employee_id}</Text>
+              </View>
+            </Pressable>
+          ))}
+        </Card>
+      ) : secondParties.length === 1 ? (
+        <Card><Text style={styles.sectionHeading}>Assigned second person</Text><Text style={styles.body}>{secondParties[0].display_name} · {secondParties[0].employee_id}</Text></Card>
+      ) : null}
       <Banner tone="amber" text="The locker stays locked during review. Do not leave the locker unattended while a request is active." />
       {error ? <Banner tone="danger" text={error} /> : null}
-      <Button label={submitting ? 'Submitting…' : 'Submit access request'} onPress={async () => {setSubmitting(true); setError(''); try {await onSubmit(reason);} catch (nextError) {setError(nextError.message);} finally {setSubmitting(false);}}} style={styles.pageButton} disabled={!ble.sessionOpen || submitting} loading={submitting} />
+      {loadingSecondParties ? <ActivityIndicator size="small" color={colors.accent} /> : null}
+      {!loadingSecondParties && secondParties.length === 0 ? <Text style={styles.centerNote}>No other active person with an approved device is assigned to this locker. Ask an administrator to complete their enrollment.</Text> : null}
+      <Button label={submitting ? 'Submitting…' : 'Submit access request'} onPress={async () => {setSubmitting(true); setError(''); try {await onSubmit(reason, secondPartyId);} catch (nextError) {setError(nextError.message);} finally {setSubmitting(false);}}} style={styles.pageButton} disabled={!ble.sessionOpen || loadingSecondParties || !secondPartyId || submitting} loading={submitting} />
       {!ble.sessionOpen ? <Text style={styles.centerNote}>Open the secure requester session first.</Text> : null}
     </Screen>
   );
@@ -537,7 +606,7 @@ function App() {
     case 'PersonAConnected':
       return <ConnectedScreen role="A" ble={ble} sessionIdValue={ids.requester} onBack={back} onRequest={() => navigate('PersonAAccessRequest')} onFailure={type => replace('FailureState', {type})} />;
     case 'PersonAAccessRequest':
-      return <AccessRequestScreen ble={ble} onBack={back} onSubmit={async reason => {const request = await api.createUnlockRequest({locker_id: LOCKER_ID, reason, ble_session_id: bytesToCompactHex(ids.requester)}); setBackendPresence({sessionId: request.presence_session_id, bleSessionId: bytesToCompactHex(ids.requester)}); navigate('PersonAWaitingReview', {request});}} />;
+      return <AccessRequestScreen ble={ble} api={api} onBack={back} onSubmit={async (reason, secondPartyId) => {const request = await api.createUnlockRequest({locker_id: LOCKER_ID, reason, second_party_id: secondPartyId, ble_session_id: bytesToCompactHex(ids.requester)}); setBackendPresence({sessionId: request.presence_session_id, bleSessionId: bytesToCompactHex(ids.requester)}); navigate('PersonAWaitingReview', {request});}} />;
     case 'PersonAWaitingReview':
       return <WaitingReviewScreen ble={ble} api={api} request={current.request} onCancel={async () => {await endBackendPresence(); ble.disconnect(); home();}} onApproved={request => replace('PersonAApprovedWaitingB', {request})} onSuccess={request => replace('AuthorizationSuccess', {request})} onFailure={type => replace('FailureState', {type})} />;
     case 'PersonAApprovedWaitingB':
@@ -572,6 +641,10 @@ const styles = StyleSheet.create({
   loginHero: {alignItems: 'center', paddingHorizontal: 24, paddingTop: 42, paddingBottom: 24},
   signInCard: {gap: 11},
   signInInput: {minHeight: 48, borderWidth: 1, borderColor: colors.borderStrong, borderRadius: 10, paddingHorizontal: 13, color: colors.textPrimary, backgroundColor: colors.surface},
+  rememberRow: {minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 10},
+  rememberBox: {width: 20, height: 20, borderWidth: 1.5, borderColor: colors.borderStrong, borderRadius: 5, alignItems: 'center', justifyContent: 'center'},
+  rememberBoxChecked: {backgroundColor: colors.accent, borderColor: colors.accent},
+  rememberCheck: {fontSize: 14, lineHeight: 18, fontWeight: '800', color: colors.surface},
   demoAuthWarning: {fontSize: 11, lineHeight: 16, color: colors.amberText, textAlign: 'center', marginTop: 1},
   brandLogo: {width: 230, height: 66, marginBottom: 18},
   brandLogoCompact: {width: 184, height: 48, marginBottom: 12},
@@ -605,6 +678,7 @@ const styles = StyleSheet.create({
   radio: {width: 18, height: 18, borderRadius: 9, borderWidth: 1.5, borderColor: colors.borderStrong},
   selectedRadio: {borderWidth: 5, borderColor: colors.accent},
   optionText: {flex: 1, fontSize: 14, color: colors.textPrimary},
+  secondPartyLabel: {flex: 1},
   otpHeader: {alignItems: 'center', paddingTop: 28, paddingBottom: 16},
   otpInput: {height: 64, borderWidth: 1.5, borderColor: colors.borderStrong, borderRadius: 14, marginTop: 18, marginBottom: 12, paddingHorizontal: 18, textAlign: 'center', fontSize: 28, letterSpacing: 8, fontWeight: '800', color: colors.textPrimary},
   verificationHero: {alignItems: 'center', paddingHorizontal: 28, paddingTop: 60, paddingBottom: 32, gap: 16},

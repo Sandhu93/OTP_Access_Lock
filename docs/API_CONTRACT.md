@@ -71,7 +71,7 @@ GET    /api/v1/admin/alerts
 ```
 
 Approval requires a reason note. The response contains the request state and OTP delivery status,
-never the OTP value. Approval creates a single-use, one-minute OTP challenge for the eligible
+never the OTP value. Approval creates a single-use, one-minute OTP challenge for the assigned
 second party. The dashboard must not display or transport the OTP.
 
 ## Mobile endpoints
@@ -82,6 +82,7 @@ PATCH  /api/v1/mobile/presence-sessions/{session_id}/heartbeat
 DELETE /api/v1/mobile/presence-sessions/{session_id}
 POST   /api/v1/mobile/devices/register
 GET    /api/v1/mobile/devices/{device_id}/enrollment-status
+GET    /api/v1/mobile/eligible-second-parties?locker_id={locker_id}
 POST   /api/v1/mobile/unlock-requests
 GET    /api/v1/mobile/unlock-requests
 GET    /api/v1/mobile/unlock-requests/{request_id}
@@ -108,6 +109,15 @@ proceeds only after the API reports `active`. A user's second distinct device is
 this admin-only first-enrollment flow: replacement/re-enrollment needs the separate second-party
 ceremony described in `SECURITY_RULES.md`, which remains unimplemented and fails closed. Explicit
 local `DEV_MODE` retains its clearly marked auto-enrollment behavior for local demonstration only.
+
+Person A may create a request while only A is connected to the lock. The backend assigns the
+only eligible active, locker-enrolled user with an active device automatically; if more than one
+is eligible, A must choose one from `GET /api/v1/mobile/eligible-second-parties`. The selected
+second party does not need BLE presence at request time. Approval creates the OTP challenge and
+sends a wake-up event, but challenge retrieval is withheld until that assigned second party has a
+fresh backend presence session for the request. OTP verification additionally requires fresh
+backend presence heartbeats from both participants; the signed grant binds both BLE session IDs.
+The client must keep both BLE links and backend heartbeats active through verification.
 
 The mobile unlock-request response includes `presence_session_id` for the requester-created
 backend presence session. The requester must PATCH that session's heartbeat while the request is

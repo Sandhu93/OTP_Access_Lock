@@ -29,6 +29,7 @@ static esp_mqtt_client_handle_t s_mqtt_client;
 static lock_logic_context_t *s_lock_context;
 static device_gateway_actuate_cb_t s_actuate_callback;
 static volatile bool s_mqtt_connected;
+static volatile int s_last_telemetry_message_id = -1;
 static char s_commands_topic[192];
 static char s_telemetry_topic[192];
 static char s_events_topic[192];
@@ -58,7 +59,13 @@ static void publish_telemetry(void)
                                 (unsigned long)(xTaskGetTickCount() * portTICK_PERIOD_MS),
                                 lock_logic_state_name(s_lock_context->state));
     if (length > 0 && (size_t)length < sizeof(payload)) {
-        esp_mqtt_client_publish(s_mqtt_client, s_telemetry_topic, payload, length, 1, 0);
+        const int message_id = esp_mqtt_client_publish(s_mqtt_client, s_telemetry_topic, payload, length, 1, 0);
+        if (message_id < 0) {
+            ESP_LOGE(TAG, "Telemetry heartbeat publish could not be queued: rc=%d", message_id);
+        } else {
+            s_last_telemetry_message_id = message_id;
+            ESP_LOGI(TAG, "Telemetry heartbeat queued: msg_id=%d", message_id);
+        }
     }
 }
 
@@ -91,6 +98,12 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     case MQTT_EVENT_DISCONNECTED:
         s_mqtt_connected = false;
         ESP_LOGW(TAG, "MQTT disconnected; lock remains fail-closed");
+        break;
+    case MQTT_EVENT_PUBLISHED:
+        if (event->msg_id == s_last_telemetry_message_id) {
+            ESP_LOGI(TAG, "Telemetry heartbeat acknowledged by broker: msg_id=%d", event->msg_id);
+            s_last_telemetry_message_id = -1;
+        }
         break;
     case MQTT_EVENT_DATA:
         if (event->topic_len != (int)strlen(s_commands_topic) ||

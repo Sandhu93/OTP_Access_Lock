@@ -1,5 +1,5 @@
 // Backend client boundary for the authenticated mobile flow.
-// The caller supplies the access token obtained through OIDC Authorization Code + PKCE.
+// The caller supplies the access token from OIDC or the temporary password-demo login.
 
 import {MOBILE_PUBLIC_ORIGIN} from '../config/localDemo';
 
@@ -35,6 +35,7 @@ export function createAccessLockApi({baseUrl = DEFAULT_API_BASE_URL, getAccessTo
   return {
     registerDevice: (payload) => request('/api/v1/mobile/devices/register', {method: 'POST', body: JSON.stringify(payload)}),
     getDeviceEnrollmentStatus: (deviceId) => request(`/api/v1/mobile/devices/${deviceId}/enrollment-status`),
+    getEligibleSecondParties: (lockerId) => request(`/api/v1/mobile/eligible-second-parties?locker_id=${encodeURIComponent(lockerId)}`),
     createUnlockRequest: (payload) => request('/api/v1/mobile/unlock-requests', {method: 'POST', body: JSON.stringify(payload)}),
     listUnlockRequests: () => request('/api/v1/mobile/unlock-requests'),
     getUnlockRequest: (requestId) => request(`/api/v1/mobile/unlock-requests/${requestId}`),

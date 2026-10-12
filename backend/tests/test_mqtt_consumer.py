@@ -1,4 +1,5 @@
 import json
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -24,6 +25,28 @@ def test_telemetry_heartbeat_marks_matching_locker_online():
     assert locker.status == "online"
     assert locker.last_seen_at is not None
     assert locker.telemetry.get().event_type == "heartbeat"
+
+
+def test_connect_subscribes_to_telemetry_and_reports_broker_ack(caplog):
+    caplog.set_level(logging.INFO)
+    class FakeClient:
+        subscriptions = []
+
+        def subscribe(self, topic, qos):
+            self.subscriptions.append((topic, qos))
+            return 0, len(self.subscriptions)
+
+    client = FakeClient()
+    command = mqtt_consumer.Command()
+    command._on_connect(client, None, None, 0)
+    command._on_subscribe(client, None, 1, [SimpleNamespace(is_failure=False)])
+
+    assert client.subscriptions == [
+        ("locks/+/+/telemetry", 1),
+        ("locks/+/+/events", 1),
+    ]
+    assert "requested telemetry/events subscriptions" in caplog.text
+    assert "MQTT subscription acknowledged" in caplog.text
 
 
 @override_settings(

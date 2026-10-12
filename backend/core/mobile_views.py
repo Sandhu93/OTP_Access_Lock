@@ -113,6 +113,36 @@ def _enrollment(identity, locker):
     return LockerEnrollment.objects.filter(locker=locker, user=identity, revoked_at__isnull=True).exists()
 
 
+def _eligible_second_parties(identity, locker):
+    return EnrolledUser.objects.filter(
+        tenant=identity.tenant,
+        status="active",
+        locker_enrollments__locker=locker,
+        locker_enrollments__revoked_at__isnull=True,
+        devices__status="active",
+    ).exclude(id=identity.id).distinct().order_by("display_name", "employee_id")
+
+
+class MobileEligibleSecondPartiesView(MobileIdentityMixin, APIView):
+    def get(self, request):
+        identity = self.identity()
+        if not identity:
+            return self.denied()
+        try:
+            locker_id = request.query_params.get("locker_id")
+            locker = Locker.objects.get(id=locker_id, tenant=identity.tenant)
+        except (Locker.DoesNotExist, ValidationError, ValueError, TypeError):
+            return Response({"detail": "locker is not available to this identity"}, status=status.HTTP_404_NOT_FOUND)
+        if not _enrollment(identity, locker):
+            return Response({"detail": "locker enrollment is required"}, status=status.HTTP_403_FORBIDDEN)
+        eligible = _eligible_second_parties(identity, locker)
+        return Response([{
+            "id": str(user.id),
+            "display_name": user.display_name,
+            "employee_id": user.employee_id,
+        } for user in eligible])
+
+
 class MobileUnlockRequestView(MobileIdentityMixin, APIView):
     def get(self, request):
         identity = self.identity()
@@ -132,16 +162,23 @@ class MobileUnlockRequestView(MobileIdentityMixin, APIView):
         locker = Locker.objects.filter(id=values["locker_id"], tenant=identity.tenant).first()
         if not locker or not _enrollment(identity, locker):
             return Response({"detail": "locker enrollment is required"}, status=status.HTTP_403_FORBIDDEN)
+        eligible = _eligible_second_parties(identity, locker)
         second_party = None
         if values.get("second_party_id"):
-            second_party = EnrolledUser.objects.filter(id=values["second_party_id"], tenant=identity.tenant, status="active").first()
-            if not second_party or not _enrollment(second_party, locker) or second_party.id == identity.id:
+            second_party = eligible.filter(id=values["second_party_id"]).first()
+            if not second_party:
                 return Response({"detail": "second party is not enrolled for this locker"}, status=status.HTTP_400_BAD_REQUEST)
-        elif settings.DEV_MODE:
-            # SECURITY-PLACEHOLDER: local demo selects the first other enrolled person; production must use the reviewed policy/selection flow.
-            second_party = EnrolledUser.objects.filter(tenant=identity.tenant, status="active", locker_enrollments__locker=locker, locker_enrollments__revoked_at__isnull=True).exclude(id=identity.id).order_by("id").first()
+        else:
+            eligible_count = eligible.count()
+            if eligible_count == 1:
+                second_party = eligible.first()
+            elif eligible_count > 1:
+                return Response({
+                    "detail": "select an eligible second party",
+                    "error_code": "second_party_selection_required",
+                }, status=status.HTTP_400_BAD_REQUEST)
         if not second_party:
-            return Response({"detail": "an eligible second party is required"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "no other active, enrolled person with an approved device is eligible for this locker"}, status=status.HTTP_400_BAD_REQUEST)
 
         with transaction.atomic():
             unlock_request = UnlockRequest.objects.create(
@@ -210,6 +247,17 @@ class MobilePresenceSessionView(MobileIdentityMixin, APIView):
         return Response({"session_id": str(presence.id), "last_heartbeat_at": now}, status=status.HTTP_201_CREATED)
 
 
+def _has_fresh_presence(unlock_request, user_id, now=None):
+    current_time = now or timezone.now()
+    return PresenceSession.objects.filter(
+        request=unlock_request,
+        user_id=user_id,
+        locker_id=unlock_request.locker_id,
+        ended_at__isnull=True,
+        last_heartbeat_at__gte=current_time - timedelta(seconds=30),
+    ).exists()
+
+
 class MobilePresenceHeartbeatView(MobileIdentityMixin, APIView):
     def patch(self, request, session_id):
         identity = self.identity()
@@ -259,6 +307,8 @@ class MobileOtpChallengeView(MobileIdentityMixin, APIView):
             return Response({"detail": "administrator approval is required before this challenge can be used", "error_code": "request_not_approved"}, status=status.HTTP_409_CONFLICT)
         if expire_otp_challenge_if_needed(challenge.id):
             return Response({"detail": "OTP challenge has expired", "error_code": "challenge_expired"}, status=status.HTTP_410_GONE)
+        if not _has_fresh_presence(request_state, identity.id):
+            return Response({"detail": "connect to the assigned locker before retrieving the OTP", "error_code": "second_party_presence_required"}, status=status.HTTP_409_CONFLICT)
         if challenge.delivery_status != "delivered":
             return Response({"detail": "challenge is not ready for retrieval"}, status=status.HTTP_409_CONFLICT)
         try:
@@ -287,6 +337,13 @@ class MobileOtpChallengeVerifyView(MobileIdentityMixin, APIView):
         request_state = expire_unlock_request_if_needed(challenge.request_id)
         if request_state.status != APPROVED_WAITING:
             return Response({"detail": "administrator approval is required before this challenge can be used", "error_code": "request_not_approved"}, status=status.HTTP_409_CONFLICT)
+        if expire_otp_challenge_if_needed(challenge.id):
+            return Response({"detail": "OTP challenge has expired", "error_code": "challenge_expired"}, status=status.HTTP_410_GONE)
+        now = timezone.now()
+        if not _has_fresh_presence(request_state, identity.id, now):
+            return Response({"detail": "second-party presence is no longer active; reconnect to the locker", "error_code": "second_party_presence_required"}, status=status.HTTP_409_CONFLICT)
+        if not _has_fresh_presence(request_state, request_state.requester_id, now):
+            return Response({"detail": "requester presence is no longer active; both people must remain connected", "error_code": "both_party_presence_required"}, status=status.HTTP_409_CONFLICT)
         serializer = MobileOtpVerifySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         verified = verify_otp_challenge(challenge.id, serializer.validated_data["otp"])

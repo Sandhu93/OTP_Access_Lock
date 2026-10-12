@@ -10,6 +10,7 @@ export const OIDC_REDIRECT_URI = 'accesslock://oauth/callback';
 const SESSION_KEY = 'access_lock_auth_session';
 const LEGACY_OIDC_SESSION_KEY = 'oidc_session';
 const PENDING_KEY = 'oidc_pending';
+const SAVED_PASSWORD_CREDENTIALS_KEY = 'access_lock_saved_password_credentials';
 const secureStore = NativeModules.AccessLockSecureStore;
 
 async function readJson(key) {
@@ -115,7 +116,7 @@ export function useAccessLockAuth() {
     return () => { active = false; subscription.remove(); };
   }, [consumeCallback]);
 
-  const signIn = useCallback(async ({tenantSlug, employeeId, username, password} = {}) => {
+  const signIn = useCallback(async ({tenantSlug, employeeId, username, password, rememberCredentials = false} = {}) => {
     try {
       if (authMode === 'password_demo') {
         const response = await fetch(`${MOBILE_API_BASE_URL.replace(/\/$/, '')}/api/v1/auth/mobile-login`, {
@@ -132,6 +133,15 @@ export function useAccessLockAuth() {
           idToken: '',
         };
         await writeJson(SESSION_KEY, next);
+        if (rememberCredentials) {
+          await writeJson(SAVED_PASSWORD_CREDENTIALS_KEY, {
+            tenantSlug,
+            employeeId,
+            password,
+          });
+        } else {
+          await secureStore.removeItem(SAVED_PASSWORD_CREDENTIALS_KEY);
+        }
         await secureStore.removeItem(LEGACY_OIDC_SESSION_KEY);
         setSession(next);
         setError('');
@@ -159,6 +169,15 @@ export function useAccessLockAuth() {
       throw nextError;
     }
   }, [authMode]);
+
+  const getSavedPasswordCredentials = useCallback(async () => {
+    if (authMode !== 'password_demo') return null;
+    return readJson(SAVED_PASSWORD_CREDENTIALS_KEY);
+  }, [authMode]);
+
+  const clearSavedPasswordCredentials = useCallback(async () => {
+    await secureStore.removeItem(SAVED_PASSWORD_CREDENTIALS_KEY);
+  }, []);
 
   const getAccessToken = useCallback(async () => {
     let current = await readJson(SESSION_KEY);
@@ -189,7 +208,7 @@ export function useAccessLockAuth() {
     setSession(null);
   }, []);
 
-  return {session, authMode, loading, error, isSignedIn: Boolean(session?.accessToken), signIn, signOut, getAccessToken};
+  return {session, authMode, loading, error, isSignedIn: Boolean(session?.accessToken), signIn, signOut, getAccessToken, getSavedPasswordCredentials, clearSavedPasswordCredentials};
 }
 
 // SECURITY-PLACEHOLDER: local demo device registration uses a Keystore-protected random fingerprint,

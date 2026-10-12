@@ -42,11 +42,19 @@ gcloud run worker-pools describe access-lock-mqtt-consumer --region asia-south1
 gcloud logging read 'resource.type="cloud_run_worker_pool" AND resource.labels.worker_pool_name="access-lock-mqtt-consumer"' --limit 50
 ```
 
-Expected startup log: `MQTT device gateway listening`. Send an ESP32 heartbeat and confirm that
-`GET /api/v1/admin/lockers/` changes the locker to `online` and advances `last_seen_at`. The worker
-marks a locker offline after 90 seconds without telemetry. Do not deploy multiple worker instances
-for this single consumer unless the event handler is made idempotent and consumer coordination is
-added.
+Expected startup log: `MQTT device gateway listening`, followed by `MQTT broker connected` and
+`MQTT subscription acknowledged` for the worker's two subscriptions. The ESP32 should log
+`Telemetry heartbeat queued` and `Telemetry heartbeat acknowledged by broker`; the worker should
+then log `Persisted lock telemetry heartbeat`. A broker acknowledgement proves EMQX accepted the
+publish, not that the worker persisted it. A worker warning for an unknown tenant/locker topic
+usually means the firmware topic IDs do not match the Neon tenant and locker IDs. A subscription
+rejection points to the EMQX user's topic ACL. If the ESP32 never queues a heartbeat, troubleshoot
+its Wi-Fi connection and stored device preferences first.
+
+Send an ESP32 heartbeat and confirm that `GET /api/v1/admin/lockers/` changes the locker to `online`
+and advances `last_seen_at`. The worker marks a locker offline after 90 seconds without telemetry.
+Do not deploy multiple worker instances for this single consumer unless the event handler is made
+idempotent and consumer coordination is added.
 
 This hosted demo uses EMQX TLS with username/password. It is not the production per-lock mTLS and
 ACL model described in `DEVICE_MQTT_PROTOCOL.md`. The MQTT consumer persists telemetry in Neon;
