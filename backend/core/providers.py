@@ -202,14 +202,20 @@ class DevelopmentSigner(KmsSigner):
 
 class MqttDeviceGateway:
     def publish_signed_grant(self, tenant_id: str, locker_id: str, command_id: str, payload: bytes):
-        if not settings.MQTT_BROKER_URL or not settings.MQTT_CLIENT_CERT_PATH or not settings.MQTT_CLIENT_KEY_PATH or not settings.MQTT_CA_CERT_PATH:
-            raise ProviderNotConfigured("MQTT broker and mTLS certificate paths are not configured")
+        has_client_cert = bool(settings.MQTT_CLIENT_CERT_PATH and settings.MQTT_CLIENT_KEY_PATH)
+        has_password = bool(settings.MQTT_USERNAME and settings.MQTT_PASSWORD)
+        if not settings.MQTT_BROKER_URL or not (has_client_cert or has_password):
+            raise ProviderNotConfigured("MQTT broker and either username/password or a client certificate/key are not configured")
+        if bool(settings.MQTT_CLIENT_CERT_PATH) != bool(settings.MQTT_CLIENT_KEY_PATH):
+            raise ProviderNotConfigured("MQTT client certificate and key must be configured together")
         parsed = urllib.parse.urlparse(settings.MQTT_BROKER_URL)
         if parsed.scheme != "mqtts":
             raise ProviderNotConfigured("MQTT broker must use mqtts://")
         client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=settings.MQTT_CLIENT_ID, protocol=mqtt.MQTTv5)
         try:
-            client.tls_set(ca_certs=settings.MQTT_CA_CERT_PATH, certfile=settings.MQTT_CLIENT_CERT_PATH, keyfile=settings.MQTT_CLIENT_KEY_PATH, tls_version=ssl.PROTOCOL_TLS_CLIENT)
+            client.tls_set(ca_certs=settings.MQTT_CA_CERT_PATH or None, certfile=settings.MQTT_CLIENT_CERT_PATH or None, keyfile=settings.MQTT_CLIENT_KEY_PATH or None, tls_version=ssl.PROTOCOL_TLS_CLIENT)
+            if has_password:
+                client.username_pw_set(settings.MQTT_USERNAME, settings.MQTT_PASSWORD)
             client.connect(parsed.hostname, parsed.port or 8883, keepalive=30)
             client.loop_start()
             result = client.publish(f"locks/{tenant_id}/{locker_id}/commands", payload=payload, qos=1)

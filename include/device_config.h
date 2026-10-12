@@ -25,6 +25,15 @@
 #ifndef DEMO_MQTT_CLIENT_ID
 #define DEMO_MQTT_CLIENT_ID "lock-demo"
 #endif
+#ifndef DEMO_MQTT_USE_SYSTEM_TRUST_STORE
+#define DEMO_MQTT_USE_SYSTEM_TRUST_STORE 0
+#endif
+#ifndef DEMO_MQTT_USERNAME
+#define DEMO_MQTT_USERNAME ""
+#endif
+#ifndef DEMO_MQTT_PASSWORD
+#define DEMO_MQTT_PASSWORD ""
+#endif
 #ifndef DEMO_TENANT_ID
 #define DEMO_TENANT_ID ""
 #endif

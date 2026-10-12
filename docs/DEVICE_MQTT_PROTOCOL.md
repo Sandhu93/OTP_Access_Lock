@@ -1,16 +1,24 @@
 # Device MQTT Protocol
 
-Status: **local demonstration path implemented / production provisioning remains open**.
+Status: **ESP32 telemetry and the hosted-demo Cloud Run MQTT worker support EMQX TLS username/password;
+per-lock production certificate provisioning remains open**.
 
 MQTT is transport only. A lock must verify the backend-issued signed grant locally before it
 actuates. MQTT connection state, topic delivery, RSSI, or a dashboard action is never sufficient.
 
 ## Identity and topics
 
-Each lock receives a unique device certificate and private key during secure provisioning. The
-broker ACL limits the device to its own namespace. The tracked ACL is only a startup fallback;
+For production, each lock receives a unique device certificate and private key during secure
+provisioning. The broker ACL limits the device to its own namespace. The hosted demo currently uses
+EMQX TLS plus username/password and must be treated as demo-grade until per-lock credentials and
+ACLs are provisioned. The tracked ACL is only a startup fallback;
 `scripts/prepare-esp32-demo.ps1` generates an ignored exact tenant/locker ACL before a physical
 local demonstration:
+
+The demo firmware seeds the Wi-Fi SSID/password from its ignored provisioning header into the
+ESP-IDF NVS `wifi_cfg` namespace on first boot, then loads them from NVS on later boots. NVS
+encryption is not enabled in this demo, so physical flash access can expose the stored network
+credentials; do not treat this storage mode as production credential protection.
 
 ```text
 locks/{tenant_id}/{locker_id}/telemetry

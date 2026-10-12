@@ -3,7 +3,8 @@ param(
   [Parameter(Mandatory = $true)][string]$WifiPassword,
   [Parameter(Mandatory = $true)][string]$BrokerHost,
   [Parameter(Mandatory = $true)][string]$TenantId,
-  [Parameter(Mandatory = $true)][string]$LockerId
+  [Parameter(Mandatory = $true)][string]$LockerId,
+  [switch]$UseSystemTrustStore
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,9 +14,15 @@ $signingDir = Join-Path $root 'infra\dev-signing'
 $output = Join-Path $root 'include\demo_device_config.h'
 $aclOutput = Join-Path $root 'infra\mosquitto\aclfile.local'
 
-foreach ($required in @('ca.crt', 'lock-demo.crt', 'lock-demo.key')) {
-  $path = Join-Path $certDir $required
-  if (-not (Test-Path -LiteralPath $path)) { throw "Missing local MQTT certificate: $path" }
+if ($UseSystemTrustStore) {
+  if ([string]::IsNullOrWhiteSpace($env:MQTT_USERNAME) -or [string]::IsNullOrWhiteSpace($env:MQTT_PASSWORD)) {
+    throw 'MQTT_USERNAME and MQTT_PASSWORD must be loaded into the current process environment.'
+  }
+} else {
+  foreach ($required in @('ca.crt', 'lock-demo.crt', 'lock-demo.key')) {
+    $path = Join-Path $certDir $required
+    if (-not (Test-Path -LiteralPath $path)) { throw "Missing local MQTT certificate: $path" }
+  }
 }
 $publicKey = Join-Path $signingDir 'dev-public.pem'
 if (-not (Test-Path -LiteralPath $publicKey)) { throw "Missing development public key: $publicKey" }
@@ -43,6 +50,18 @@ function Convert-ValueToCString([string]$value) {
   return '"' + $value.Replace('\', '\\').Replace('"', '\"') + '"'
 }
 
+$useCloudCredentials = if ($UseSystemTrustStore) { 1 } else { 0 }
+$mqttCredentials = if ($UseSystemTrustStore) {
+  "#define DEMO_MQTT_USERNAME $(Convert-ValueToCString $env:MQTT_USERNAME)`r`n#define DEMO_MQTT_PASSWORD $(Convert-ValueToCString $env:MQTT_PASSWORD)"
+} else {
+  '#define DEMO_MQTT_USERNAME ""' + "`r`n" + '#define DEMO_MQTT_PASSWORD ""'
+}
+$mqttCertificates = if ($UseSystemTrustStore) {
+  '#define DEMO_CA_CERT_PEM ""' + "`r`n" + '#define DEMO_DEVICE_CERT_PEM ""' + "`r`n" + '#define DEMO_DEVICE_KEY_PEM ""'
+} else {
+  "#define DEMO_CA_CERT_PEM $(Convert-ToCString (Join-Path $certDir 'ca.crt'))`r`n#define DEMO_DEVICE_CERT_PEM $(Convert-ToCString (Join-Path $certDir 'lock-demo.crt'))`r`n#define DEMO_DEVICE_KEY_PEM $(Convert-ToCString (Join-Path $certDir 'lock-demo.key'))"
+}
+
 $header = @"
 #ifndef DEMO_DEVICE_CONFIG_H
 #define DEMO_DEVICE_CONFIG_H
@@ -51,14 +70,14 @@ $header = @"
 #define DEMO_WIFI_PASSWORD $(Convert-ValueToCString $WifiPassword)
 #define DEMO_MQTT_URI $(Convert-ValueToCString "mqtts://${BrokerHost}:8883")
 #define DEMO_MQTT_CLIENT_ID "lock-demo"
+#define DEMO_MQTT_USE_SYSTEM_TRUST_STORE $useCloudCredentials
+$mqttCredentials
 #define DEMO_TENANT_ID $(Convert-ValueToCString $TenantId)
 #define DEMO_LOCKER_ID $(Convert-ValueToCString $LockerId)
 #define DEMO_SIGNING_KEY_ID "local-demo"
 static const uint8_t DEMO_SIGNING_PUBLIC_KEY[] = { $publicKeyBytes };
 #define DEMO_SIGNING_PUBLIC_KEY_LEN 65U
-#define DEMO_CA_CERT_PEM $(Convert-ToCString (Join-Path $certDir 'ca.crt'))
-#define DEMO_DEVICE_CERT_PEM $(Convert-ToCString (Join-Path $certDir 'lock-demo.crt'))
-#define DEMO_DEVICE_KEY_PEM $(Convert-ToCString (Join-Path $certDir 'lock-demo.key'))
+$mqttCertificates
 #define DEMO_SIGNING_PUBLIC_KEY_PEM $(Convert-ToCString $publicKey)
 #endif
 "@

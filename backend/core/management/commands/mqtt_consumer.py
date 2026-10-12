@@ -2,6 +2,7 @@ import json
 import ssl
 import time
 import urllib.parse
+from datetime import timedelta
 
 import paho.mqtt.client as mqtt
 from django.conf import settings
@@ -12,17 +13,28 @@ from core.models import AuditLogEntry, Locker, LockTelemetry, Tenant
 
 
 class Command(BaseCommand):
-    help = "Consume local-demo lock telemetry/events over MQTT mTLS."
+    help = "Consume lock telemetry/events over MQTT TLS using broker credentials or client certificates."
 
     def handle(self, *args, **options):
-        if not all((settings.MQTT_BROKER_URL, settings.MQTT_CA_CERT_PATH, settings.MQTT_CLIENT_CERT_PATH, settings.MQTT_CLIENT_KEY_PATH)):
-            raise CommandError("MQTT broker and mTLS certificate paths are required")
+        has_client_cert = bool(settings.MQTT_CLIENT_CERT_PATH and settings.MQTT_CLIENT_KEY_PATH)
+        has_password = bool(settings.MQTT_USERNAME and settings.MQTT_PASSWORD)
+        if not settings.MQTT_BROKER_URL or not (has_client_cert or has_password):
+            raise CommandError("MQTT_BROKER_URL and either MQTT username/password or a client certificate/key are required")
+        if bool(settings.MQTT_CLIENT_CERT_PATH) != bool(settings.MQTT_CLIENT_KEY_PATH):
+            raise CommandError("MQTT client certificate and key must be configured together")
         parsed = urllib.parse.urlparse(settings.MQTT_BROKER_URL)
         if parsed.scheme != "mqtts" or not parsed.hostname:
             raise CommandError("MQTT_BROKER_URL must use mqtts://")
 
         client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=settings.MQTT_CLIENT_ID, protocol=mqtt.MQTTv5)
-        client.tls_set(ca_certs=settings.MQTT_CA_CERT_PATH, certfile=settings.MQTT_CLIENT_CERT_PATH, keyfile=settings.MQTT_CLIENT_KEY_PATH, tls_version=ssl.PROTOCOL_TLS_CLIENT)
+        client.tls_set(
+            ca_certs=settings.MQTT_CA_CERT_PATH or None,
+            certfile=settings.MQTT_CLIENT_CERT_PATH or None,
+            keyfile=settings.MQTT_CLIENT_KEY_PATH or None,
+            tls_version=ssl.PROTOCOL_TLS_CLIENT,
+        )
+        if has_password:
+            client.username_pw_set(settings.MQTT_USERNAME, settings.MQTT_PASSWORD)
         client.on_connect = self._on_connect
         client.on_message = self._on_message
         client.connect(parsed.hostname, parsed.port or 8883, keepalive=30)
@@ -30,6 +42,8 @@ class Command(BaseCommand):
         self.stdout.write("MQTT device gateway listening")
         try:
             while True:
+                stale_before = timezone.now() - timedelta(seconds=90)
+                Locker.objects.filter(status="online", last_seen_at__lt=stale_before).update(status="offline")
                 time.sleep(30)
         except KeyboardInterrupt:
             pass

@@ -6,6 +6,7 @@
 
 #include "device_config.h"
 #include "esp_event.h"
+#include "esp_crt_bundle.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
@@ -31,6 +32,8 @@ static volatile bool s_mqtt_connected;
 static char s_commands_topic[192];
 static char s_telemetry_topic[192];
 static char s_events_topic[192];
+static char s_wifi_ssid[33];
+static char s_wifi_password[65];
 static uint8_t s_command_buffer[COMMAND_BUFFER_SIZE];
 static size_t s_command_length;
 
@@ -121,11 +124,55 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
     }
 }
 
+static esp_err_t load_wifi_preferences(void)
+{
+    nvs_handle_t preferences;
+    esp_err_t err = nvs_open("wifi_cfg", NVS_READWRITE, &preferences);
+    if (err != ESP_OK) return err;
+
+    size_t ssid_length = sizeof(s_wifi_ssid);
+    size_t password_length = sizeof(s_wifi_password);
+    esp_err_t ssid_err = nvs_get_str(preferences, "ssid", s_wifi_ssid, &ssid_length);
+    esp_err_t password_err = nvs_get_str(preferences, "password", s_wifi_password, &password_length);
+
+    /* First boot seeds the private NVS namespace from the ignored local provisioning header.
+     * Subsequent boots load the persisted preferences and do not need the values rebuilt into
+     * each new firmware image. NVS encryption is not enabled in this demo profile. */
+    bool changed = false;
+    if (ssid_err == ESP_ERR_NVS_NOT_FOUND) {
+        if (strlen(DEMO_WIFI_SSID) == 0) { nvs_close(preferences); return ESP_ERR_NOT_FOUND; }
+        err = nvs_set_str(preferences, "ssid", DEMO_WIFI_SSID);
+        if (err != ESP_OK) { nvs_close(preferences); return err; }
+        changed = true;
+    } else if (ssid_err != ESP_OK) { nvs_close(preferences); return ssid_err; }
+    if (password_err == ESP_ERR_NVS_NOT_FOUND) {
+        if (strlen(DEMO_WIFI_PASSWORD) == 0) { nvs_close(preferences); return ESP_ERR_NOT_FOUND; }
+        err = nvs_set_str(preferences, "password", DEMO_WIFI_PASSWORD);
+        if (err != ESP_OK) { nvs_close(preferences); return err; }
+        changed = true;
+    } else if (password_err != ESP_OK) { nvs_close(preferences); return password_err; }
+    if (changed) {
+        err = nvs_commit(preferences);
+        if (err != ESP_OK) { nvs_close(preferences); return err; }
+    }
+
+    ssid_length = sizeof(s_wifi_ssid);
+    password_length = sizeof(s_wifi_password);
+    err = nvs_get_str(preferences, "ssid", s_wifi_ssid, &ssid_length);
+    if (err == ESP_OK) err = nvs_get_str(preferences, "password", s_wifi_password, &password_length);
+    nvs_close(preferences);
+    if (err != ESP_OK) return err;
+    if (s_wifi_ssid[0] == '\0' || s_wifi_password[0] == '\0') return ESP_ERR_INVALID_STATE;
+    ESP_LOGI(TAG, "Loaded Wi-Fi settings from device preferences");
+    return ESP_OK;
+}
+
 static esp_err_t start_wifi(void)
 {
-    if (strlen(DEMO_WIFI_SSID) == 0 || strlen(DEMO_WIFI_PASSWORD) == 0) {
-        ESP_LOGE(TAG, "Wi-Fi credentials are missing; run prepare-esp32-demo.ps1");
-        return ESP_ERR_INVALID_STATE;
+    esp_err_t preferences_result = load_wifi_preferences();
+    if (preferences_result != ESP_OK) {
+        ESP_LOGE(TAG, "Wi-Fi preferences are unavailable; provision the device and retry");
+        return preferences_result;
     }
     s_wifi_events = xEventGroupCreate();
     if (s_wifi_events == NULL) return ESP_ERR_NO_MEM;
@@ -137,8 +184,8 @@ static esp_err_t start_wifi(void)
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL));
     wifi_config_t wifi_config = {0};
-    strlcpy((char *)wifi_config.sta.ssid, DEMO_WIFI_SSID, sizeof(wifi_config.sta.ssid));
-    strlcpy((char *)wifi_config.sta.password, DEMO_WIFI_PASSWORD, sizeof(wifi_config.sta.password));
+    strlcpy((char *)wifi_config.sta.ssid, s_wifi_ssid, sizeof(wifi_config.sta.ssid));
+    strlcpy((char *)wifi_config.sta.password, s_wifi_password, sizeof(wifi_config.sta.password));
     wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
@@ -151,15 +198,36 @@ static void gateway_task(void *arg)
     (void)arg;
     xEventGroupWaitBits(s_wifi_events, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
-    esp_sntp_setservername(0, "pool.ntp.org");
+    /* Cloudflare's public NTP anycast address avoids DNS dependence during TLS bootstrap. */
+    esp_sntp_setservername(0, "162.159.200.1");
+    ESP_LOGI(TAG, "Synchronizing clock with the public NTP service before MQTT TLS");
     esp_sntp_init();
+
+    /* TLS certificate validity must be checked against a synchronized clock. */
+    const time_t minimum_valid_time = 1704067200; /* 2024-01-01 UTC */
+    time_t current_time = time(NULL);
+    for (int attempt = 0; current_time < minimum_valid_time && attempt < 30; ++attempt) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        current_time = time(NULL);
+    }
+    if (current_time < minimum_valid_time) {
+        ESP_LOGE(TAG, "System time did not synchronize; refusing MQTT TLS connection");
+        vTaskDelete(NULL);
+        return;
+    }
 
     esp_mqtt_client_config_t mqtt_config = {
         .broker.address.uri = DEMO_MQTT_URI,
+#if DEMO_MQTT_USE_SYSTEM_TRUST_STORE
+        .broker.verification.crt_bundle_attach = esp_crt_bundle_attach,
+        .credentials.username = DEMO_MQTT_USERNAME,
+        .credentials.authentication.password = DEMO_MQTT_PASSWORD,
+#else
         .broker.verification.certificate = DEMO_CA_CERT_PEM,
-        .credentials.client_id = DEMO_MQTT_CLIENT_ID,
         .credentials.authentication.certificate = DEMO_DEVICE_CERT_PEM,
         .credentials.authentication.key = DEMO_DEVICE_KEY_PEM,
+#endif
+        .credentials.client_id = DEMO_MQTT_CLIENT_ID,
     };
     s_mqtt_client = esp_mqtt_client_init(&mqtt_config);
     if (s_mqtt_client == NULL) {

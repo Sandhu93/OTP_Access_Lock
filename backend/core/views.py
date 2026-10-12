@@ -4,11 +4,13 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
 from django.utils import timezone
+from django.db import transaction
+from django.shortcuts import get_object_or_404
 
 from .models import AuditLogEntry, Device, EnrolledUser, Locker, LockerPolicy, SecurityAlert, Site, UnlockRequest
 from .permissions import CanManageInventory, CanReviewUnlockRequest, TenantPermission, tenant_for_request
 from .providers import ProviderNotConfigured, get_mobile_delivery_provider
-from .serializers import AuditLogEntrySerializer, DeviceSerializer, EnrolledUserSerializer, LockerPolicySerializer, LockerSerializer, ReviewSerializer, SecurityAlertSerializer, SiteSerializer, UnlockRequestSerializer
+from .serializers import AuditLogEntrySerializer, DeviceReviewSerializer, DeviceSerializer, EnrolledUserSerializer, LockerPolicySerializer, LockerSerializer, ReviewSerializer, SecurityAlertSerializer, SiteSerializer, UnlockRequestSerializer
 from .services import EXPIRABLE_REQUEST_STATUSES, WorkflowError, approve_unlock_request, expire_unlock_request_if_needed, reject_unlock_request
 
 
@@ -78,6 +80,8 @@ class DeviceViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
         return self.scoped_queryset(Device.objects.select_related("user").order_by("user__display_name"))
 
     def get_permissions(self):
+        if self.action in {"approve", "reject"}:
+            return [CanReviewUnlockRequest()]
         return [CanManageInventory()] if self.action == "revoke" else super().get_permissions()
 
     @action(detail=True, methods=["post"], url_path="revoke")
@@ -87,6 +91,37 @@ class DeviceViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
         device.revoked_at = timezone.now()
         device.save(update_fields=["status", "revoked_at"])
         return Response(self.get_serializer(device).data)
+
+    @transaction.atomic
+    def _review(self, request, decision):
+        lookup_url_kwarg = self.lookup_url_kwarg or self.lookup_field
+        device = get_object_or_404(
+            self.filter_queryset(self.get_queryset().select_for_update()),
+            **{self.lookup_field: self.kwargs[lookup_url_kwarg]},
+        )
+        self.check_object_permissions(request, device)
+        if device.status != "pending":
+            return Response({"detail": "Only pending device enrollments can be reviewed."}, status=status.HTTP_409_CONFLICT)
+        serializer = DeviceReviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        device.status = "active" if decision == "approve" else "rejected"
+        device.reviewed_at = timezone.now()
+        device.reviewed_by = request.user
+        device.review_reason = serializer.validated_data["reason"]
+        device.save(update_fields=["status", "reviewed_at", "reviewed_by", "review_reason"])
+        from .services import _audit
+
+        event_name = "approved" if decision == "approve" else "rejected"
+        _audit(device.tenant, request.user, f"mobile_device.{event_name}", None, {"device_id": str(device.id), "user_id": str(device.user_id), "reason": device.review_reason})
+        return Response(self.get_serializer(device).data)
+
+    @action(detail=True, methods=["post"], url_path="approve")
+    def approve(self, request, *args, **kwargs):
+        return self._review(request, "approve")
+
+    @action(detail=True, methods=["post"], url_path="reject")
+    def reject(self, request, *args, **kwargs):
+        return self._review(request, "reject")
 
 
 class PolicyViewSet(TenantScopedMixin, viewsets.ModelViewSet):

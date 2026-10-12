@@ -61,6 +61,8 @@ GET    /api/v1/admin/users
 POST   /api/v1/admin/users
 POST   /api/v1/admin/users/{user_id}/revoke
 GET    /api/v1/admin/devices
+POST   /api/v1/admin/devices/{device_id}/approve
+POST   /api/v1/admin/devices/{device_id}/reject
 POST   /api/v1/admin/devices/{device_id}/revoke
 POST   /api/v1/admin/enrollments
 POST   /api/v1/admin/enrollments/{enrollment_id}/revoke
@@ -79,6 +81,7 @@ POST   /api/v1/mobile/presence-sessions
 PATCH  /api/v1/mobile/presence-sessions/{session_id}/heartbeat
 DELETE /api/v1/mobile/presence-sessions/{session_id}
 POST   /api/v1/mobile/devices/register
+GET    /api/v1/mobile/devices/{device_id}/enrollment-status
 POST   /api/v1/mobile/unlock-requests
 GET    /api/v1/mobile/unlock-requests
 GET    /api/v1/mobile/unlock-requests/{request_id}
@@ -96,6 +99,15 @@ or backend logs.
 
 The backend verifies the authenticated device identity, locker enrollment, active BLE/presence
 session, request state, OTP hash, expiry, and retry count before issuing any signed grant.
+
+In production mode, first-time mobile registration creates a tenant/user-bound `pending` device and
+returns HTTP 202; the mobile app polls only that device's enrollment status using its authenticated
+identity. Tenant owners/admins can approve or reject a pending first-time device with a required
+reason, and the decision is audit logged. Operators cannot approve device identities. The app
+proceeds only after the API reports `active`. A user's second distinct device is not eligible for
+this admin-only first-enrollment flow: replacement/re-enrollment needs the separate second-party
+ceremony described in `SECURITY_RULES.md`, which remains unimplemented and fails closed. Explicit
+local `DEV_MODE` retains its clearly marked auto-enrollment behavior for local demonstration only.
 
 The mobile unlock-request response includes `presence_session_id` for the requester-created
 backend presence session. The requester must PATCH that session's heartbeat while the request is
@@ -131,6 +143,7 @@ atomic update.
 
 The local Docker profile includes Keycloak, Mosquitto mTLS, an FCM HTTP v1 adapter, and an explicit
 development signing adapter. The FCM message is only a wake-up event; it carries a challenge ID
-and expiry, never the OTP. Authenticated mobile device enrollment and OTP retrieval are still
-required before this is an end-to-end mobile flow. Production requires an approved OIDC/MFA
-provider, cloud KMS/HSM, managed MQTT CA/certificate lifecycle, and provider integration tests.
+and expiry, never the OTP. The hosted demo uses a separate continuous Cloud Run worker pool for the
+EMQX subscriber; the API container itself serves HTTP only. Production requires an approved
+OIDC/MFA provider, cloud KMS/HSM, managed per-lock MQTT certificate lifecycle, and provider
+integration tests.

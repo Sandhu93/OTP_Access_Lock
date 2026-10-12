@@ -61,25 +61,52 @@ class MobileIdentityMixin:
 
 
 class MobileDeviceRegistrationView(MobileIdentityMixin, APIView):
+    @transaction.atomic
     def post(self, request):
         identity = self.identity(require_device=False)
+        if not identity:
+            return self.denied()
+        identity = EnrolledUser.objects.select_for_update().filter(id=identity.id).select_related("tenant").first()
         if not identity:
             return self.denied()
         serializer = MobileDeviceRegistrationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         values = serializer.validated_data
-        device = Device.objects.filter(user=identity, public_key_fingerprint=values["public_key_fingerprint"], status="active").first()
+        fingerprint = values["public_key_fingerprint"]
+        device = Device.objects.filter(user=identity, public_key_fingerprint=fingerprint).first()
+        if device and device.status in {"rejected", "revoked"}:
+            return Response({"detail": "This device enrollment was rejected or revoked; re-enrollment requires the approved second-party ceremony.", "error_code": "device_enrollment_closed"}, status=status.HTTP_403_FORBIDDEN)
+        if not device and Device.objects.filter(user=identity).exists():
+            return Response({"detail": "A different device is already enrolled or awaiting review; replacement enrollment requires the approved second-party ceremony.", "error_code": "device_reenrollment_requires_second_party"}, status=status.HTTP_409_CONFLICT)
         if not device:
-            if not settings.DEV_MODE:
-                return Response({"detail": "device enrollment requires administrator approval"}, status=status.HTTP_403_FORBIDDEN)
-            # SECURITY-PLACEHOLDER: local demo auto-enrollment skips hardware-backed attestation; replace with the approved enrollment ceremony before production. See TODO_SECURITY_DEBT.md
-            device = Device.objects.create(tenant=identity.tenant, user=identity, platform=values["platform"], public_key_fingerprint=values["public_key_fingerprint"], status="active")
+            device = Device.objects.create(
+                tenant=identity.tenant,
+                user=identity,
+                platform=values["platform"],
+                public_key_fingerprint=fingerprint,
+                status="active" if settings.DEV_MODE else "pending",
+            )
+            from .services import _audit
+
+            event_type = "mobile_device.enrollment_requested" if device.status == "pending" else "mobile_device.auto_enrolled_demo"
+            _audit(identity.tenant, None, event_type, None, {"device_id": str(device.id), "user_id": str(identity.id), "platform": device.platform})
         device.platform = values["platform"]
         device.push_token = values.get("push_token", "")
         device.last_seen_at = timezone.now()
-        device.status = "active"
         device.save(update_fields=["platform", "push_token", "last_seen_at", "status"])
-        return Response({"device_id": str(device.id), "status": device.status})
+        response_status = status.HTTP_200_OK if device.status == "active" else status.HTTP_202_ACCEPTED
+        return Response({"device_id": str(device.id), "status": device.status}, status=response_status)
+
+
+class MobileDeviceEnrollmentStatusView(MobileIdentityMixin, APIView):
+    def get(self, request, device_id):
+        identity = self.identity(require_device=False)
+        if not identity:
+            return self.denied()
+        device = Device.objects.filter(id=device_id, tenant=identity.tenant, user=identity).first()
+        if not device:
+            return Response({"detail": "device enrollment not found"}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"device_id": str(device.id), "status": device.status, "reviewed_at": device.reviewed_at})
 
 
 def _enrollment(identity, locker):

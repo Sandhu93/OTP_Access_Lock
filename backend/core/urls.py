@@ -3,7 +3,7 @@ from rest_framework.routers import DefaultRouter
 
 from .views import AuditLogViewSet, DeviceViewSet, HealthView, LockerViewSet, OverviewView, PolicyViewSet, SecurityAlertViewSet, SiteViewSet, UnlockRequestViewSet, UserViewSet
 from .auth_views import AuthMeView, AuthModeView, CsrfView, LogoutView, MobilePasswordLoginView, OidcCallbackView, OidcLoginView, PasswordLoginView
-from .mobile_views import MobileDeviceRegistrationView, MobileOtpChallengeView, MobileOtpChallengeVerifyView, MobilePresenceHeartbeatView, MobilePresenceSessionDetailView, MobilePresenceSessionView, MobileUnlockRequestDetailView, MobileUnlockRequestView
+from .mobile_views import MobileDeviceEnrollmentStatusView, MobileDeviceRegistrationView, MobileOtpChallengeView, MobileOtpChallengeVerifyView, MobilePresenceHeartbeatView, MobilePresenceSessionDetailView, MobilePresenceSessionView, MobileUnlockRequestDetailView, MobileUnlockRequestView
 
 
 router = DefaultRouter()
@@ -27,6 +27,7 @@ urlpatterns = [
     path("auth/mobile-login", MobilePasswordLoginView.as_view(), name="mobile-password-login"),
     path("auth/logout", LogoutView.as_view(), name="auth-logout"),
     path("mobile/devices/register", MobileDeviceRegistrationView.as_view(), name="mobile-device-register"),
+    path("mobile/devices/<uuid:device_id>/enrollment-status", MobileDeviceEnrollmentStatusView.as_view(), name="mobile-device-enrollment-status"),
     path("mobile/presence-sessions", MobilePresenceSessionView.as_view(), name="mobile-presence-create"),
     path("mobile/presence-sessions/<uuid:session_id>", MobilePresenceSessionDetailView.as_view(), name="mobile-presence-delete"),
     path("mobile/presence-sessions/<uuid:session_id>/heartbeat", MobilePresenceHeartbeatView.as_view(), name="mobile-presence-heartbeat"),

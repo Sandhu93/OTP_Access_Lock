@@ -437,6 +437,7 @@ function App() {
   const ble = useLockBle();
   const [deviceId, setDeviceId] = useState('');
   const [deviceError, setDeviceError] = useState('');
+  const [deviceEnrollmentStatus, setDeviceEnrollmentStatus] = useState('requesting');
   const api = useMemo(() => createAccessLockApi({baseUrl: MOBILE_API_BASE_URL, getAccessToken: auth.getAccessToken, getDeviceId: async () => deviceId}), [auth.getAccessToken, deviceId]);
   const [stack, setStack] = useState([{name: 'LockerHome'}]);
   const [foundDevice, setFoundDevice] = useState(null);
@@ -483,21 +484,38 @@ function App() {
   };
 
   useEffect(() => {
-    if (!auth.isSignedIn) {setDeviceId(''); return undefined;}
+    if (!auth.isSignedIn) {setDeviceId(''); setDeviceEnrollmentStatus('requesting'); return undefined;}
     let active = true;
     (async () => {
       try {
         const fingerprint = await AccessLockSecureStore.getOrCreateDeviceFingerprint();
-        const result = await createAccessLockApi({baseUrl: MOBILE_API_BASE_URL, getAccessToken: auth.getAccessToken}).registerDevice({platform: 'android', public_key_fingerprint: fingerprint});
-        if (active) {setDeviceId(result.device_id); setDeviceError('');}
-      } catch (error) {if (active) setDeviceError(error.message);}
+        const enrollmentApi = createAccessLockApi({baseUrl: MOBILE_API_BASE_URL, getAccessToken: auth.getAccessToken});
+        const result = await enrollmentApi.registerDevice({platform: 'android', public_key_fingerprint: fingerprint});
+        if (!active) return;
+        setDeviceError('');
+        setDeviceEnrollmentStatus(result.status);
+        if (result.status === 'active') {setDeviceId(result.device_id); return;}
+        if (result.status !== 'pending') throw new Error('The device enrollment was not accepted. Contact your administrator.');
+        while (active) {
+          await new Promise(resolve => setTimeout(resolve, 5000));
+          if (!active) return;
+          const current = await enrollmentApi.getDeviceEnrollmentStatus(result.device_id);
+          if (!active) return;
+          setDeviceEnrollmentStatus(current.status);
+          if (current.status === 'active') {setDeviceId(current.device_id); setDeviceError(''); return;}
+          if (current.status === 'rejected' || current.status === 'revoked') {
+            setDeviceError('This device enrollment was not approved. Contact your administrator.');
+            return;
+          }
+        }
+      } catch (error) {if (active) {setDeviceEnrollmentStatus('error'); setDeviceError(error.message);}}
     })();
     return () => {active = false;};
   }, [auth.getAccessToken, auth.isSignedIn]);
 
   if (auth.loading) return <Screen><ActivityIndicator size="large" color={colors.accent} /></Screen>;
   if (!auth.isSignedIn) return <LoginScreen auth={auth} />;
-  if (!deviceId) return <Screen><TopBar title="Preparing secure device" centered eyebrow="Device enrollment" /><ActivityIndicator size="large" color={colors.accent} /><Text style={styles.centerNote}>{deviceError || 'Registering this phone with the local authorization service…'}</Text><Button label="Sign out" onPress={auth.signOut} variant="secondary" /></Screen>;
+  if (!deviceId) return <Screen><TopBar title="Preparing secure device" centered eyebrow="Device enrollment" />{deviceEnrollmentStatus === 'error' ? null : <ActivityIndicator size="large" color={colors.accent} />}<Text style={styles.centerNote}>{deviceError || (deviceEnrollmentStatus === 'pending' ? 'Waiting for administrator approval. This screen updates automatically after the decision.' : 'Registering this phone with the authorization service…')}</Text><Button label="Sign out" onPress={auth.signOut} variant="secondary" /></Screen>;
 
   const navigate = (name, params = {}) => setStack(previous => [...previous, {name, ...params}]);
   const replace = (name, params = {}) => setStack(previous => [...previous.slice(0, -1), {name, ...params}]);
