@@ -82,6 +82,7 @@ PATCH  /api/v1/mobile/presence-sessions/{session_id}/heartbeat
 DELETE /api/v1/mobile/presence-sessions/{session_id}
 POST   /api/v1/mobile/devices/register
 GET    /api/v1/mobile/devices/{device_id}/enrollment-status
+GET    /api/v1/mobile/eligible-second-parties?locker_id={locker_id}
 POST   /api/v1/mobile/unlock-requests
 GET    /api/v1/mobile/unlock-requests
 GET    /api/v1/mobile/unlock-requests/{request_id}
@@ -96,6 +97,10 @@ registration must send the active `X-Device-ID`; revoked devices are rejected. T
 decrypts the backend envelope only for the authenticated second-party device and returns the OTP to
 that mobile client over the authenticated TLS API. It never appears in FCM metadata, the dashboard,
 or backend logs.
+
+The eligible-second-parties endpoint returns only other active users in the caller's tenant
+who are enrolled for the requested locker and have an active device. The locker ID is tenant-scoped;
+a caller without enrollment is denied.
 
 The backend verifies the authenticated device identity, locker enrollment, active BLE/presence
 session, request state, OTP hash, expiry, and retry count before issuing any signed grant.
