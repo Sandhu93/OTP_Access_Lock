@@ -54,8 +54,10 @@ export function createAccessLockApi({baseUrl = DEFAULT_API_BASE_URL, getAccessTo
   return {
     registerDevice: (payload) => request('/api/v1/mobile/devices/register', {method: 'POST', body: JSON.stringify(payload)}),
     getDeviceEnrollmentStatus: (deviceId) => request(`/api/v1/mobile/devices/${deviceId}/enrollment-status`),
+    listEligibleSecondParties: (lockerId) => request(`/api/v1/mobile/eligible-second-parties?locker_id=${encodeURIComponent(lockerId)}`),
     createUnlockRequest: (payload) => request('/api/v1/mobile/unlock-requests', {method: 'POST', body: JSON.stringify(payload)}),
     listUnlockRequests: () => request('/api/v1/mobile/unlock-requests'),
+    createLockerPresenceSession: (payload) => request('/api/v1/mobile/locker-presence-sessions', {method: 'POST', body: JSON.stringify(payload)}),
     getUnlockRequest: (requestId) => request(`/api/v1/mobile/unlock-requests/${requestId}`),
     createPresenceSession: (payload) => request('/api/v1/mobile/presence-sessions', {method: 'POST', body: JSON.stringify(payload)}),
     heartbeatPresence: (sessionId, payload = {}) => request(`/api/v1/mobile/presence-sessions/${sessionId}/heartbeat`, {method: 'PATCH', body: JSON.stringify(payload)}),

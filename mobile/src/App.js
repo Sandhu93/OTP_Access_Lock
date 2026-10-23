@@ -32,6 +32,7 @@ import {
 const {LOCK_DEVICE_NAME, SESSION_ROLES} = require('./ble/lockProtocol');
 const LOCKER_ID = 'acba64a7-bbd9-46a8-afe2-0fe155d70ad3';
 const {AccessLockSecureStore} = NativeModules;
+const SAVED_CREDENTIALS_KEY = 'access_lock_saved_demo_credentials';
 
 const FAILURE_COPY = {
   connectionFailed: ['Couldn’t connect to the locker', 'Move closer to the locker and try again.', 'Retry'],
@@ -91,10 +92,34 @@ function LoginScreen({auth}) {
   const [tenantSlug, setTenantSlug] = useState('');
   const [employeeId, setEmployeeId] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberCredentials, setRememberCredentials] = useState(false);
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (auth.authMode !== 'password_demo') return;
+    let active = true;
+    AccessLockSecureStore.getItem(SAVED_CREDENTIALS_KEY).then(value => {
+      if (!active || !value) return;
+      const saved = JSON.parse(value);
+      setTenantSlug(saved.tenantSlug || '');
+      setEmployeeId(saved.employeeId || '');
+      setPassword(saved.password || '');
+      setRememberCredentials(true);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [auth.authMode]);
+  const toggleRememberCredentials = async () => {
+    const next = !rememberCredentials;
+    setRememberCredentials(next);
+    if (!next) await AccessLockSecureStore.removeItem(SAVED_CREDENTIALS_KEY);
+  };
   const submit = async () => {
     setBusy(true);
-    try { await auth.signIn({tenantSlug: tenantSlug.trim(), employeeId: employeeId.trim(), password}); }
+    try {
+      const credentials = {tenantSlug: tenantSlug.trim(), employeeId: employeeId.trim(), password};
+      await auth.signIn(credentials);
+      if (rememberCredentials) await AccessLockSecureStore.setItem(SAVED_CREDENTIALS_KEY, JSON.stringify(credentials));
+      else await AccessLockSecureStore.removeItem(SAVED_CREDENTIALS_KEY);
+    }
     catch (_) { /* The auth hook exposes a user-safe error message. */ }
     finally { setBusy(false); }
   };
@@ -116,6 +141,10 @@ function LoginScreen({auth}) {
           <TextInput value={tenantSlug} onChangeText={setTenantSlug} autoCapitalize="none" autoCorrect={false} placeholder="Organization code" placeholderTextColor={colors.textTertiary} style={styles.signInInput} accessibilityLabel="Organization code" />
           <TextInput value={employeeId} onChangeText={setEmployeeId} autoCapitalize="characters" autoCorrect={false} placeholder="Employee ID" placeholderTextColor={colors.textTertiary} style={styles.signInInput} accessibilityLabel="Employee ID" />
           <TextInput value={password} onChangeText={setPassword} autoCapitalize="none" autoCorrect={false} secureTextEntry placeholder="Password" placeholderTextColor={colors.textTertiary} style={styles.signInInput} accessibilityLabel="Password" />
+          <Pressable accessibilityRole="checkbox" accessibilityState={{checked: rememberCredentials}} onPress={toggleRememberCredentials} style={styles.rememberCredentials}>
+            <View style={[styles.rememberCheckbox, rememberCredentials && styles.rememberCheckboxChecked]}>{rememberCredentials ? <Text style={styles.rememberCheckmark}>✓</Text> : null}</View>
+            <View style={styles.rememberCopy}><Text style={styles.rememberTitle}>Remember credentials on this phone</Text><Text style={styles.muted}>Stored encrypted with Android Keystore. Turn off to remove them.</Text></View>
+          </Pressable>
           <Button label={busy ? 'Signing in…' : 'Sign in'} onPress={submit} loading={busy} disabled={busy || !tenantSlug || !employeeId || !password} style={styles.pageButton} />
           <Text style={styles.demoAuthWarning}>Password-only temporary demo mode. Not for production use.</Text>
         </Card>
@@ -233,19 +262,42 @@ function ConnectedScreen({ble, role, sessionIdValue, onBack, onRequest, onFailur
   );
 }
 
-function AccessRequestScreen({ble, onBack, onSubmit}) {
+function AccessRequestScreen({ble, api, onBack, onSubmit}) {
   const [reason, setReason] = useState('Secure document retrieval');
+  const [secondParties, setSecondParties] = useState([]);
+  const [selectedSecondPartyId, setSelectedSecondPartyId] = useState('');
+  const [loadingSecondParties, setLoadingSecondParties] = useState(true);
+  const [eligibilityError, setEligibilityError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const reasons = ['Secure document retrieval', 'Cash or instrument handling', 'Other controlled access'];
+  useEffect(() => {
+    let active = true;
+    api.listEligibleSecondParties(LOCKER_ID)
+      .then(people => {
+        if (!active) return;
+        setSecondParties(people);
+        setSelectedSecondPartyId(people.length === 1 ? people[0].id : '');
+        setEligibilityError(people.length ? '' : 'No eligible second person is enrolled for this locker. Ask an administrator to enroll Person B and approve their phone.');
+      })
+      .catch(nextError => {
+        if (active) setEligibilityError(nextError.message || 'Could not load eligible second people. Check the connection and try again.');
+      })
+      .finally(() => {if (active) setLoadingSecondParties(false);});
+    return () => {active = false;};
+  }, [api]);
+  const canSubmit = !loadingSecondParties && secondParties.length > 0 && (secondParties.length === 1 || secondParties.some(person => person.id === selectedSecondPartyId));
   return (
     <Screen>
       <TopBar title="Access request" onBack={onBack} eyebrow="Person A · Request access" />
       <PageTitle title="Why do you need access?" subtitle="The administrator will review this reason before the second person is invited." />
       <Card>{reasons.map(option => <Pressable key={option} onPress={() => setReason(option)} style={[styles.option, reason === option && styles.selectedOption]}><View style={[styles.radio, reason === option && styles.selectedRadio]} /><Text style={styles.optionText}>{option}</Text></Pressable>)}</Card>
+      <PageTitle title="Second person" subtitle={secondParties.length === 1 ? 'The only eligible enrolled person will be assigned automatically.' : 'Choose the enrolled colleague who will confirm presence after approval.'} tone="success" />
+      {loadingSecondParties ? <ActivityIndicator size="small" color={colors.accent} /> : secondParties.length > 1 ? <Card>{secondParties.map(person => <Pressable key={person.id} onPress={() => setSelectedSecondPartyId(person.id)} style={[styles.option, selectedSecondPartyId === person.id && styles.selectedOption]}><View style={[styles.radio, selectedSecondPartyId === person.id && styles.selectedRadio]} /><View><Text style={styles.optionText}>{person.display_name}</Text><Text style={styles.muted}>{person.employee_id}</Text></View></Pressable>)}</Card> : secondParties.length === 1 ? <Card><Text style={styles.cardTitle}>{secondParties[0].display_name}</Text><Text style={styles.muted}>{secondParties[0].employee_id}</Text></Card> : null}
+      {eligibilityError ? <Banner tone="danger" text={eligibilityError} /> : null}
       <Banner tone="amber" text="The locker stays locked during review. Do not leave the locker unattended while a request is active." />
       {error ? <Banner tone="danger" text={error} /> : null}
-      <Button label={submitting ? 'Submitting…' : 'Submit access request'} onPress={async () => {setSubmitting(true); setError(''); try {await onSubmit(reason);} catch (nextError) {setError(nextError.message);} finally {setSubmitting(false);}}} style={styles.pageButton} disabled={!ble.sessionOpen || submitting} loading={submitting} />
+      <Button label={submitting ? 'Submitting…' : 'Submit access request'} onPress={async () => {setSubmitting(true); setError(''); try {await onSubmit(reason, selectedSecondPartyId || undefined);} catch (nextError) {setError(nextError.message);} finally {setSubmitting(false);}}} style={styles.pageButton} disabled={!ble.sessionOpen || !canSubmit || submitting} loading={submitting} />
       {!ble.sessionOpen ? <Text style={styles.centerNote}>Open the secure requester session first.</Text> : null}
     </Screen>
   );
@@ -469,6 +521,8 @@ function App() {
   const [stack, setStack] = useState([{name: 'LockerHome'}]);
   const [foundDevice, setFoundDevice] = useState(null);
   const [backendPresence, setBackendPresence] = useState(null);
+  const [lockerPresence, setLockerPresence] = useState(null);
+  const [bleRole, setBleRole] = useState('A');
   const ids = useMemo(() => ({requester: sessionId(Date.now()), approver: sessionId(Date.now() + 17)}), []);
   const current = stack[stack.length - 1];
 
@@ -497,6 +551,45 @@ function App() {
       clearInterval(timer);
     };
   }, [api, auth.isSignedIn, backendPresence]);
+
+  // Report authenticated mobile presence as soon as the encrypted BLE session
+  // opens, even before Person A creates a request or Person B selects one. This
+  // is what lets the other participant see the fresh backend heartbeat.
+  useEffect(() => {
+    if (!auth.isSignedIn || !deviceId || !ble.connected || !ble.sessionOpen) return undefined;
+    let active = true;
+    let createdSession = null;
+    const bleSessionId = bytesToCompactHex(bleRole === 'A' ? ids.requester : ids.approver);
+    api.createLockerPresenceSession({locker_id: LOCKER_ID, ble_session_id: bleSessionId})
+      .then(presence => {
+        createdSession = presence;
+        if (active) setLockerPresence({sessionId: presence.session_id, bleSessionId});
+        else api.endPresenceSession(presence.session_id).catch(() => {});
+      })
+      .catch(error => console.warn('[AccessLock] Locker presence registration failed', {status: error?.status || 0, errorCode: error?.errorCode || 'network_error'}));
+    return () => {
+      active = false;
+      if (createdSession) {
+        setLockerPresence(current => current?.sessionId === createdSession.session_id ? null : current);
+        api.endPresenceSession(createdSession.session_id).catch(() => {});
+      }
+    };
+  }, [api, auth.isSignedIn, ble.connected, ble.sessionOpen, deviceId, bleRole, ids]);
+
+  useEffect(() => {
+    if (!lockerPresence || !auth.isSignedIn) return undefined;
+    let active = true;
+    const heartbeat = async () => {
+      try {
+        await api.heartbeatPresence(lockerPresence.sessionId, {ble_session_id: lockerPresence.bleSessionId});
+      } catch (error) {
+        console.warn('[AccessLock] Locker presence heartbeat failed', {status: error?.status || 0, errorCode: error?.errorCode || 'network_error'});
+      }
+    };
+    heartbeat();
+    const timer = setInterval(() => {if (active) heartbeat();}, 5000);
+    return () => {active = false; clearInterval(timer);};
+  }, [api, auth.isSignedIn, lockerPresence]);
 
   const endBackendPresence = async () => {
     const activePresence = backendPresence;
@@ -565,7 +658,7 @@ function App() {
     case 'PersonAConnected':
       return <ConnectedScreen role="A" ble={ble} sessionIdValue={ids.requester} onBack={back} onRequest={() => navigate('PersonAAccessRequest')} onFailure={type => replace('FailureState', {type})} />;
     case 'PersonAAccessRequest':
-      return <AccessRequestScreen ble={ble} onBack={back} onSubmit={async reason => {const request = await api.createUnlockRequest({locker_id: LOCKER_ID, reason, ble_session_id: bytesToCompactHex(ids.requester)}); setBackendPresence({sessionId: request.presence_session_id, bleSessionId: bytesToCompactHex(ids.requester)}); navigate('PersonAWaitingReview', {request});}} />;
+      return <AccessRequestScreen ble={ble} api={api} onBack={back} onSubmit={async (reason, secondPartyId) => {const request = await api.createUnlockRequest({locker_id: LOCKER_ID, reason, ble_session_id: bytesToCompactHex(ids.requester), ...(secondPartyId ? {second_party_id: secondPartyId} : {})}); setBackendPresence({sessionId: request.presence_session_id, bleSessionId: bytesToCompactHex(ids.requester)}); navigate('PersonAWaitingReview', {request});}} />;
     case 'PersonAWaitingReview':
       return <WaitingReviewScreen ble={ble} api={api} request={current.request} onCancel={async () => {await endBackendPresence(); ble.disconnect(); home();}} onApproved={request => replace('PersonAApprovedWaitingB', {request})} onSuccess={request => replace('AuthorizationSuccess', {request})} onFailure={type => replace('FailureState', {type})} />;
     case 'PersonAApprovedWaitingB':
@@ -590,7 +683,7 @@ function App() {
       return <HelpScreen onNavigate={handleTab} />;
     case 'LockerHome':
     default:
-      return <HomeScreen onNavigate={handleTab} onStartA={() => navigate('PersonAScan')} onStartB={() => navigate('PersonBScan')} />;
+      return <HomeScreen onNavigate={handleTab} onStartA={() => {setBleRole('A'); navigate('PersonAScan');}} onStartB={() => {setBleRole('B'); navigate('PersonBScan');}} />;
   }
 }
 
@@ -600,6 +693,12 @@ const styles = StyleSheet.create({
   loginHero: {alignItems: 'center', paddingHorizontal: 24, paddingTop: 42, paddingBottom: 24},
   signInCard: {gap: 11},
   signInInput: {minHeight: 48, borderWidth: 1, borderColor: colors.borderStrong, borderRadius: 10, paddingHorizontal: 13, color: colors.textPrimary, backgroundColor: colors.surface},
+  rememberCredentials: {minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 11, paddingVertical: 4},
+  rememberCheckbox: {width: 22, height: 22, borderWidth: 1, borderColor: colors.borderStrong, borderRadius: 5, alignItems: 'center', justifyContent: 'center'},
+  rememberCheckboxChecked: {backgroundColor: colors.accent, borderColor: colors.accent},
+  rememberCheckmark: {color: colors.surface, fontSize: 16, fontWeight: '700', lineHeight: 19},
+  rememberCopy: {flex: 1, gap: 2},
+  rememberTitle: {color: colors.textPrimary, fontSize: 14, fontWeight: '600'},
   demoAuthWarning: {fontSize: 11, lineHeight: 16, color: colors.amberText, textAlign: 'center', marginTop: 1},
   brandLogo: {width: 230, height: 66, marginBottom: 18},
   brandLogoCompact: {width: 184, height: 48, marginBottom: 12},

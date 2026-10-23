@@ -139,7 +139,7 @@ class OtpChallenge(models.Model):
 
 class PresenceSession(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    request = models.ForeignKey(UnlockRequest, on_delete=models.CASCADE, related_name="presence_sessions")
+    request = models.ForeignKey(UnlockRequest, on_delete=models.CASCADE, related_name="presence_sessions", null=True, blank=True)
     user = models.ForeignKey(EnrolledUser, on_delete=models.PROTECT)
     locker = models.ForeignKey(Locker, on_delete=models.PROTECT)
     ble_session_id = models.CharField(max_length=128)
