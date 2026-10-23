@@ -395,7 +395,16 @@ class MobileOtpChallengeVerifyView(MobileIdentityMixin, APIView):
             return Response({"detail": "both people must remain connected while verifying the OTP", "error_code": "presence_required"}, status=status.HTTP_409_CONFLICT)
         serializer = MobileOtpVerifySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        verified = verify_otp_challenge(challenge.id, serializer.validated_data["otp"])
+        try:
+            verified = verify_otp_challenge(challenge.id, serializer.validated_data["otp"])
+        except ProviderNotConfigured:
+            return Response(
+                {
+                    "detail": "Unlock authorization is temporarily unavailable because the grant provider is not configured. The locker remains locked; contact the administrator.",
+                    "error_code": "grant_provider_unavailable",
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
         challenge.refresh_from_db()
         unlock_request = UnlockRequest.objects.get(id=challenge.request_id)
         body = {
