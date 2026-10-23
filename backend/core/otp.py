@@ -9,7 +9,7 @@ from django.conf import settings
 from django.utils import timezone
 
 
-OTP_TTL = timedelta(minutes=1)
+OTP_TTL = timedelta(minutes=3)
 OTP_MAX_ATTEMPTS = 2
 
 
@@ -45,4 +45,7 @@ def decrypt_otp(ciphertext: str) -> str:
 
 
 def expiry_from_now():
-    return timezone.now() + OTP_TTL
+    # Three minutes gives Person B time to connect and fetch the code after
+    # approval. Retrieval still requires fresh presence and a single-use OTP.
+    ttl_seconds = getattr(settings, "OTP_TTL_SECONDS", int(OTP_TTL.total_seconds()))
+    return timezone.now() + timedelta(seconds=max(30, min(ttl_seconds, 600)))

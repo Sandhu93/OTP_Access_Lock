@@ -7,6 +7,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from core.models import EnrolledUser, Locker, LockerPolicy, Site, Tenant, TenantMembership, UnlockRequest
+from core.otp import expiry_from_now
 from core.services import approve_unlock_request, expire_otp_challenge_if_needed, expire_unlock_request_if_needed, verify_otp_challenge
 
 
@@ -58,6 +59,14 @@ class OtpLifecycleTests(TestCase):
             reason="dual control test",
             expires_at=timezone.now() + timedelta(minutes=5),
         )
+
+    def test_otp_expiry_allows_time_for_second_party_autofill(self):
+        before = timezone.now()
+
+        expiry = expiry_from_now()
+
+        assert before + timedelta(minutes=2, seconds=59) < expiry
+        assert expiry <= before + timedelta(minutes=3, seconds=1)
 
     def test_wrong_otp_locks_after_two_attempts(self):
         request = self._request()
