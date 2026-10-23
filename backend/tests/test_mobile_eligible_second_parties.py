@@ -41,7 +41,7 @@ def test_eligible_second_parties_are_active_tenant_and_locker_scoped():
     eligible = EnrolledUser.objects.create(
         tenant=tenant, display_name="Eligible Person", employee_id="B-01", status="active"
     )
-    eligible_device = Device.objects.create(
+    Device.objects.create(
         tenant=tenant, user=eligible, platform="android",
         public_key_fingerprint="eligible-key", status="active",
     )
