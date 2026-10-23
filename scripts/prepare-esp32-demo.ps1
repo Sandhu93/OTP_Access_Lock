@@ -4,6 +4,8 @@ param(
   [Parameter(Mandatory = $true)][string]$BrokerHost,
   [Parameter(Mandatory = $true)][string]$TenantId,
   [Parameter(Mandatory = $true)][string]$LockerId,
+  [string]$SigningPublicKeyPath,
+  [string]$SigningKeyId = 'local-demo',
   [switch]$UseSystemTrustStore
 )
 
@@ -24,8 +26,12 @@ if ($UseSystemTrustStore) {
     if (-not (Test-Path -LiteralPath $path)) { throw "Missing local MQTT certificate: $path" }
   }
 }
-$publicKey = Join-Path $signingDir 'dev-public.pem'
-if (-not (Test-Path -LiteralPath $publicKey)) { throw "Missing development public key: $publicKey" }
+$publicKey = if ([string]::IsNullOrWhiteSpace($SigningPublicKeyPath)) {
+  Join-Path $signingDir 'dev-public.pem'
+} else {
+  (Resolve-Path -LiteralPath $SigningPublicKeyPath).Path
+}
+if (-not (Test-Path -LiteralPath $publicKey)) { throw "Missing signing public key: $publicKey" }
 $publicKeyBytes = @'
 from cryptography.hazmat.primitives import serialization
 from pathlib import Path
@@ -74,7 +80,7 @@ $header = @"
 $mqttCredentials
 #define DEMO_TENANT_ID $(Convert-ValueToCString $TenantId)
 #define DEMO_LOCKER_ID $(Convert-ValueToCString $LockerId)
-#define DEMO_SIGNING_KEY_ID "local-demo"
+#define DEMO_SIGNING_KEY_ID $(Convert-ValueToCString $SigningKeyId)
 static const uint8_t DEMO_SIGNING_PUBLIC_KEY[] = { $publicKeyBytes };
 #define DEMO_SIGNING_PUBLIC_KEY_LEN 65U
 $mqttCertificates

@@ -235,7 +235,7 @@ def maybe_issue_unlock_grant(request_id):
         "required_presence_ids": [by_user[participant_id].ble_session_id for participant_id in participant_ids],
         "issued_at": int(issued_at.timestamp()),
         "expires_at": int(expires_at.timestamp()),
-        "key_id": settings.DEV_SIGNING_KEY_ID,
+        "key_id": settings.UNLOCK_SIGNING_KEY_ID,
         "nonce": nonce,
     }
     signed = get_signer().sign_unlock_grant(canonical_claims(claims))
