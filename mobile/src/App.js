@@ -1,4 +1,4 @@
-import React, {useEffect, useMemo, useState} from 'react';
+import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -50,6 +50,12 @@ const FAILURE_COPY = {
 
 function isLiveApprovedRequest(request) {
   return request.status === 'approved_waiting_second_party' && (!request.expires_at || new Date(request.expires_at).getTime() > Date.now());
+}
+
+function useLatest(value) {
+  const ref = useRef(value);
+  useEffect(() => {ref.current = value;}, [value]);
+  return ref;
 }
 
 function otpFailureType(error) {
@@ -304,24 +310,26 @@ function AccessRequestScreen({ble, api, onBack, onSubmit}) {
 }
 
 function WaitingReviewScreen({ble, request, api, onCancel, onApproved, onSuccess, onFailure}) {
+  const callbacks = useLatest({onApproved, onSuccess, onFailure});
   useEffect(() => {
     if (!request?.id) return undefined;
     let active = true;
+    let timer;
     const poll = async () => {
       try {
         const next = await api.getUnlockRequest(request.id);
         if (!active) return;
-        if (next.status === 'approved_waiting_second_party') onApproved(next);
-        if (next.status === 'token_issued') onSuccess(next);
-        if (['rejected', 'expired', 'aborted', 'otp_locked_out'].includes(next.status)) onFailure(next.status === 'rejected' ? 'adminRejected' : 'requestExpired');
+        if (next.status === 'approved_waiting_second_party') callbacks.current.onApproved(next);
+        if (next.status === 'token_issued') callbacks.current.onSuccess(next);
+        if (['rejected', 'expired', 'aborted', 'otp_locked_out'].includes(next.status)) callbacks.current.onFailure(next.status === 'rejected' ? 'adminRejected' : 'requestExpired');
       } catch (error) {
-        if (active) onFailure('backendUnavailable');
+        if (active && [401, 403].includes(error.status)) callbacks.current.onFailure('backendUnavailable');
       }
+      if (active) timer = setTimeout(poll, 3000);
     };
     poll();
-    const timer = setInterval(poll, 3000);
-    return () => {active = false; clearInterval(timer);};
-  }, [api, request?.id, onApproved, onFailure, onSuccess]);
+    return () => {active = false; clearTimeout(timer);};
+  }, [api, request?.id, callbacks]);
   return (
     <Screen>
       <TopBar title="Access request" centered eyebrow="Waiting for security review" tone="amber" />
@@ -337,22 +345,25 @@ function WaitingReviewScreen({ble, request, api, onCancel, onApproved, onSuccess
 
 function ApprovedWaitingScreen({ble, request, api, onCancel, onSuccess, onFailure}) {
   const [presence, setPresence] = useState(request?.presence || {});
+  const callbacks = useLatest({onSuccess, onFailure});
   useEffect(() => {
     if (!request?.id) return undefined;
     let active = true;
+    let timer;
     const poll = async () => {
       try {
         const next = await api.getUnlockRequest(request.id);
         if (!active) return;
-        setPresence(next.presence || {});
-        if (next.status === 'token_issued') onSuccess(next);
-        if (['rejected', 'expired', 'aborted', 'otp_locked_out'].includes(next.status)) onFailure(next.status === 'rejected' ? 'adminRejected' : 'requestExpired');
-      } catch (error) { if (active) onFailure('backendUnavailable'); }
+        const nextPresence = next.presence || {};
+        setPresence(previous => previous.requester_connected === nextPresence.requester_connected && previous.second_party_connected === nextPresence.second_party_connected ? previous : nextPresence);
+        if (next.status === 'token_issued') callbacks.current.onSuccess(next);
+        if (['rejected', 'expired', 'aborted', 'otp_locked_out'].includes(next.status)) callbacks.current.onFailure(next.status === 'rejected' ? 'adminRejected' : 'requestExpired');
+      } catch (error) { if (active && [401, 403].includes(error.status)) callbacks.current.onFailure('backendUnavailable'); }
+      if (active) timer = setTimeout(poll, 2500);
     };
     poll();
-    const timer = setInterval(poll, 2500);
-    return () => {active = false; clearInterval(timer);};
-  }, [api, request?.id, onFailure, onSuccess]);
+    return () => {active = false; clearTimeout(timer);};
+  }, [api, request?.id, callbacks]);
   return (
     <Screen>
       <TopBar title="Active request" centered eyebrow="Request approved" tone="success" />
@@ -369,25 +380,52 @@ function ApprovedRequestsScreen({api, ble, sessionIdValue, onBack, onSelect, onF
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [joiningRequestId, setJoiningRequestId] = useState('');
+  const callbacks = useLatest({onSelect, onFailure});
+  const autoJoinedRequestId = useRef('');
   useEffect(() => {
     let active = true;
+    let timer;
     const poll = async () => {
       try {
         const all = await api.listUnlockRequests();
-        if (active) {setRequests(all.filter(isLiveApprovedRequest)); setError(''); setLoading(false);}
-      } catch (nextError) {if (active) {setError(nextError.message); setLoading(false); onFailure('backendUnavailable');}}
+        const liveRequests = all.filter(isLiveApprovedRequest);
+        if (active) {setRequests(liveRequests); setError(''); setLoading(false);}
+        // The common case is exactly one assigned request. Join it immediately
+        // so Person B fetches the OTP as soon as their authenticated locker
+        // presence and approval are both available.
+        if (active && ble.sessionOpen && liveRequests.length === 1 && autoJoinedRequestId.current !== liveRequests[0].id) {
+          const request = liveRequests[0];
+          autoJoinedRequestId.current = request.id;
+          setJoiningRequestId(request.id);
+          try {
+            const presence = await api.createPresenceSession({request_id: request.id, locker_id: request.locker, ble_session_id: bytesToCompactHex(sessionIdValue)});
+            if (active) callbacks.current.onSelect(request, presence);
+          } catch (nextError) {
+            autoJoinedRequestId.current = '';
+            if (active) {setJoiningRequestId(''); setError(nextError.message);}
+          }
+        }
+      } catch (nextError) {
+        if (active) {
+          setError(nextError.message);
+          setLoading(false);
+          if ([401, 403].includes(nextError.status)) callbacks.current.onFailure('backendUnavailable');
+        }
+      }
+      if (active) timer = setTimeout(poll, 3000);
     };
     poll();
-    const timer = setInterval(poll, 3000);
-    return () => {active = false; clearInterval(timer);};
-  }, [api, onFailure]);
+    return () => {active = false; clearTimeout(timer);};
+  }, [api, ble.sessionOpen, sessionIdValue, callbacks]);
   const join = async request => {
+    setJoiningRequestId(request.id);
     try {
       const presence = await api.createPresenceSession({request_id: request.id, locker_id: request.locker, ble_session_id: bytesToCompactHex(sessionIdValue)});
-      onSelect(request, presence);
-    } catch (nextError) {setError(nextError.message);}
+      callbacks.current.onSelect(request, presence);
+    } catch (nextError) {setJoiningRequestId(''); setError(nextError.message);}
   };
-  return <Screen><TopBar title="Approved requests" onBack={onBack} eyebrow="Person B · Confirm presence" tone="success" /><PageTitle title="Choose a live request" subtitle="Only requests assigned to your enrolled identity appear here." />{error ? <Banner tone="danger" text={error} /> : null}{loading ? <ActivityIndicator size="large" color={colors.accent} /> : requests.length ? requests.map(request => <Card key={request.id}><Text style={styles.cardTitle}>{request.locker_name}</Text><Text style={styles.muted}>{request.site_name}</Text><Text style={styles.body}>{request.requester_name} · {request.reason}</Text><Button label="Confirm presence" onPress={() => join(request)} style={styles.pageButton} /></Card>) : <View style={styles.emptyState}><Text style={styles.emptyTitle}>No approved request yet</Text><Text style={styles.body}>Keep this phone connected. The list refreshes automatically after the administrator approves Person A’s request.</Text></View>}</Screen>;
+  return <Screen><TopBar title="Approved requests" onBack={onBack} eyebrow="Person B · Confirm presence" tone="success" /><PageTitle title="Choose a live request" subtitle="Only requests assigned to your enrolled identity appear here." />{error ? <Banner tone="danger" text={error} /> : null}{loading ? <ActivityIndicator size="large" color={colors.accent} /> : requests.length ? requests.map(request => <Card key={request.id}><Text style={styles.cardTitle}>{request.locker_name}</Text><Text style={styles.muted}>{request.site_name}</Text><Text style={styles.body}>{request.requester_name} · {request.reason}</Text><Button label={joiningRequestId === request.id ? 'Connecting…' : 'Confirm presence'} onPress={() => join(request)} disabled={Boolean(joiningRequestId)} loading={joiningRequestId === request.id} style={styles.pageButton} /></Card>) : <View style={styles.emptyState}><Text style={styles.emptyTitle}>No live approved request</Text><Text style={styles.body}>Keep this phone connected. It will join automatically when an assigned request is approved. If the OTP has expired, Person A must submit a new request.</Text></View>}</Screen>;
 }
 
 function OtpScreen({ble, api, request, onBack, onSuccess, onFailure}) {
@@ -395,40 +433,50 @@ function OtpScreen({ble, api, request, onBack, onSuccess, onFailure}) {
   const [challenge, setChallenge] = useState(null);
   const [challengeLoadError, setChallengeLoadError] = useState('');
   const [submitted, setSubmitted] = useState(false);
+  const callbacks = useLatest({onFailure});
   useEffect(() => {
     let active = true;
+    let retryTimer;
     const load = async () => {
-      let challengeId = request.otp_challenge_id;
+      const challengeId = request.otp_challenge_id;
+      if (!challengeId) {
+        setChallengeLoadError('This request has no active OTP. Ask Person A to submit a new request.');
+        return;
+      }
       try {
-        const current = await api.getUnlockRequest(request.id);
-        challengeId = current.otp_challenge_id || challengeId;
-        if (!isLiveApprovedRequest(current) || !challengeId) {
-          if (active) onFailure(current.status === 'expired' ? 'requestExpired' : 'requestNotApproved');
-          return;
-        }
         const next = await api.getOtpChallenge(challengeId);
         if (next.request_id !== request.id) {
-          if (active) onFailure('requestNotApproved');
+          if (active) callbacks.current.onFailure('requestNotApproved');
           return;
         }
         if (new Date(next.expires_at).getTime() <= Date.now()) {
-          if (active) onFailure('requestExpired');
+          if (active) callbacks.current.onFailure('requestExpired');
           return;
         }
         if (active) {setChallenge(next); setOtp(next.otp);}
       } catch (error) {
         if (!active) return;
-        if (challengeId && error.status !== 401 && error.status !== 403 && error.status !== 410) {
+        if (error.status === 410 || error.errorCode === 'challenge_expired') {
+          callbacks.current.onFailure('requestExpired');
+        } else if (error.errorCode === 'request_not_approved') {
+          callbacks.current.onFailure('requestNotApproved');
+        } else if (error.errorCode === 'presence_required') {
+          // B's authenticated presence row is created just before this screen
+          // opens. The backend heartbeat may not be fresh yet; keep the screen
+          // alive and retry rather than treating this as a rejected request.
+          setChallengeLoadError('Waiting for both people’s locker presence. Keep both phones connected; the code will load automatically.');
+          retryTimer = setTimeout(load, 1200);
+        } else if (error.status !== 401 && error.status !== 403) {
           setChallenge({challenge_id: challengeId, request_id: request.id});
           setChallengeLoadError('Code details could not be loaded automatically. Enter the six-digit code delivered for this approved request; the server will validate it.');
         } else {
-          onFailure(otpFailureType(error));
+          callbacks.current.onFailure(otpFailureType(error));
         }
       }
     };
     load();
-    return () => {active = false;};
-  }, [api, request?.id, onFailure]);
+    return () => {active = false; clearTimeout(retryTimer);};
+  }, [api, request?.id, request?.otp_challenge_id, callbacks]);
   const confirm = () => {
     setSubmitted(true);
     api.verifyOtpChallenge(challenge.challenge_id || request.otp_challenge_id, otp)
@@ -462,7 +510,7 @@ function OtpScreen({ble, api, request, onBack, onSuccess, onFailure}) {
       </Card>
       {challengeLoadError ? <Banner tone="amber" text={challengeLoadError} /> : null}
       <Banner tone="amber" text="Two incorrect attempts abort the request and alert the administrator." />
-      <Button label={submitted ? 'Verifying…' : 'Confirm presence'} onPress={confirm} disabled={otp.length !== 6 || submitted || !(challenge?.challenge_id || request.otp_challenge_id)} loading={submitted} style={styles.pageButton} />
+      <Button label={submitted ? 'Verifying…' : 'Confirm presence'} onPress={confirm} disabled={otp.length !== 6 || submitted || !challenge?.challenge_id} loading={submitted} style={styles.pageButton} />
       <Text style={styles.devNote}>The app verifies the code with the authorization service. Any dashboard code reveal is demo-only, audited, and must never be enabled for production.</Text>
     </Screen>
   );
@@ -470,21 +518,24 @@ function OtpScreen({ble, api, request, onBack, onSuccess, onFailure}) {
 
 function VerificationScreen({api, request, onSuccess, onFailure}) {
   const [presence, setPresence] = useState({});
+  const callbacks = useLatest({onSuccess, onFailure});
   useEffect(() => {
     let active = true;
+    let timer;
     const poll = async () => {
       try {
         const next = await api.getUnlockRequest(request.id);
         if (!active) return;
-        setPresence(next.presence || {});
-        if (next.status === 'token_issued') onSuccess(next);
-        if (['rejected', 'expired', 'aborted', 'otp_locked_out'].includes(next.status)) onFailure(next.status === 'rejected' ? 'adminRejected' : 'requestExpired');
-      } catch (error) {if (active) onFailure('backendUnavailable');}
+        const nextPresence = next.presence || {};
+        setPresence(previous => previous.requester_connected === nextPresence.requester_connected && previous.second_party_connected === nextPresence.second_party_connected ? previous : nextPresence);
+        if (next.status === 'token_issued') callbacks.current.onSuccess(next);
+        if (['rejected', 'expired', 'aborted', 'otp_locked_out'].includes(next.status)) callbacks.current.onFailure(next.status === 'rejected' ? 'adminRejected' : 'requestExpired');
+      } catch (error) {if (active && [401, 403].includes(error.status)) callbacks.current.onFailure('backendUnavailable');}
+      if (active) timer = setTimeout(poll, 2000);
     };
     poll();
-    const timer = setInterval(poll, 1500);
-    return () => {active = false; clearInterval(timer);};
-  }, [api, request?.id, onFailure, onSuccess]);
+    return () => {active = false; clearTimeout(timer);};
+  }, [api, request?.id, callbacks]);
   return <Screen><TopBar title="Verifying access" centered eyebrow="Final authorization" tone="amber" /><View style={styles.verificationHero}><ActivityIndicator size="large" color={colors.accent} /><Text style={styles.pageHeading}>Verifying both people</Text><Text style={styles.pageSubtitle}>The authorization service is checking both active sessions before issuing a signed token.</Text></View><Card><Row label="Person A" value={presence.requester_connected ? 'Connected' : 'Waiting for heartbeat'} tone={presence.requester_connected ? 'success' : 'amber'} /><Row label="Person B" value={presence.second_party_connected ? 'Connected' : 'Waiting for heartbeat'} tone={presence.second_party_connected ? 'success' : 'amber'} /><Row label="Locker" value="Still locked" /></Card><Banner tone="accent" text="Bluetooth presence is only supporting evidence. The backend must authorize the action." /></Screen>;
 }
 
