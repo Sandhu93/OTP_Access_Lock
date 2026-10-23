@@ -196,8 +196,21 @@ class UnlockRequestViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
             ended_at__isnull=True,
             last_heartbeat_at__gte=now - timedelta(seconds=30),
         )
-        if not fresh_presence.filter(user_id=unlock_request.requester_id).exists() or not fresh_presence.filter(user_id=unlock_request.second_party_id).exists():
-            return Response({"detail": "Both people must be connected to the locker before revealing the demo OTP."}, status=status.HTTP_409_CONFLICT)
+        requester_present = fresh_presence.filter(user_id=unlock_request.requester_id).exists()
+        second_party_present = fresh_presence.filter(user_id=unlock_request.second_party_id).exists()
+        if not requester_present or not second_party_present:
+            missing = []
+            if not requester_present:
+                missing.append("Person A")
+            if not second_party_present:
+                missing.append("Person B")
+            subject = " and ".join(missing)
+            verb = "has" if len(missing) == 1 else "have"
+            return Response({
+                "detail": f"{subject} {verb} no fresh backend presence heartbeat. Keep both approved apps connected to the locker and retry.",
+                "error_code": "presence_required",
+                "presence": {"requester_connected": requester_present, "second_party_connected": second_party_present},
+            }, status=status.HTTP_409_CONFLICT)
         try:
             otp = decrypt_otp(challenge.otp_ciphertext)
         except ValueError:

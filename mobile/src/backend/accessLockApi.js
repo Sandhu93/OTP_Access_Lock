@@ -5,7 +5,7 @@ import {MOBILE_PUBLIC_ORIGIN} from '../config/localDemo';
 
 const DEFAULT_API_BASE_URL = MOBILE_PUBLIC_ORIGIN;
 
-export function createAccessLockApi({baseUrl = DEFAULT_API_BASE_URL, getAccessToken, getDeviceId = async () => ''}) {
+export function createAccessLockApi({baseUrl = DEFAULT_API_BASE_URL, getAccessToken, getDeviceId = async () => '', fetchImpl = fetch, timeoutMs = 15000}) {
   async function request(path, init = {}) {
     const token = await getAccessToken();
     const headers = {'Content-Type': 'application/json', ...(init.headers || {})};
@@ -16,7 +16,25 @@ export function createAccessLockApi({baseUrl = DEFAULT_API_BASE_URL, getAccessTo
     if (deviceId) {
       headers['X-Device-ID'] = deviceId;
     }
-    const response = await fetch(`${baseUrl.replace(/\/$/, '')}${path}`, {...init, headers});
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    let timedOut = false;
+    let timeoutId;
+    const timeout = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => {
+        timedOut = true;
+        controller?.abort();
+        reject(new Error(`Access Lock request timed out (${init.method || 'GET'} ${path})`));
+      }, timeoutMs);
+    });
+    let response;
+    try {
+      response = await Promise.race([fetchImpl(`${baseUrl.replace(/\/$/, '')}${path}`, {...init, headers, ...(controller ? {signal: controller.signal} : {})}), timeout]);
+    } catch (cause) {
+      console.warn('[AccessLock] API request failed', {method: init.method || 'GET', path, timeout: timedOut});
+      throw timedOut ? cause : new Error(`Could not reach Access Lock (${init.method || 'GET'} ${path}): ${cause?.message || 'network error'}`);
+    } finally {
+      clearTimeout(timeoutId);
+    }
     if (!response.ok) {
       const contentType = response.headers.get('content-type') || '';
       const body = contentType.includes('application/json') ? await response.json().catch(() => null) : null;
@@ -24,6 +42,7 @@ export function createAccessLockApi({baseUrl = DEFAULT_API_BASE_URL, getAccessTo
       error.status = response.status;
       error.errorCode = body?.error_code || '';
       error.body = body;
+      console.warn('[AccessLock] API returned an error', {method: init.method || 'GET', path, status: response.status, errorCode: error.errorCode});
       throw error;
     }
     if (response.status === 204) {
