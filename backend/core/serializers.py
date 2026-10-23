@@ -132,6 +132,11 @@ class MobilePresenceSerializer(serializers.Serializer):
     ble_session_id = serializers.RegexField(regex=r"^[0-9a-fA-F]{16}$")
 
 
+class MobileLockerPresenceSerializer(serializers.Serializer):
+    locker_id = serializers.UUIDField()
+    ble_session_id = serializers.RegexField(regex=r"^[0-9a-fA-F]{16}$")
+
+
 class MobileHeartbeatSerializer(serializers.Serializer):
     ble_session_id = serializers.RegexField(regex=r"^[0-9a-fA-F]{16}$", required=False)
 

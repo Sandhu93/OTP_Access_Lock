@@ -8,6 +8,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
 from django.utils import timezone
 from django.db import transaction
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 
 from .models import AuditLogEntry, Device, EnrolledUser, Locker, LockerPolicy, OtpChallenge, PresenceSession, SecurityAlert, Site, UnlockRequest
@@ -190,8 +191,9 @@ class UnlockRequestViewSet(TenantScopedMixin, viewsets.ReadOnlyModelViewSet):
         now = timezone.now()
         if challenge.expires_at <= now:
             return Response({"detail": "OTP challenge has expired."}, status=status.HTTP_410_GONE)
+        participant_ids = [unlock_request.requester_id, unlock_request.second_party_id]
         fresh_presence = PresenceSession.objects.filter(
-            request=unlock_request,
+            Q(request=unlock_request) | Q(request__isnull=True, locker_id=unlock_request.locker_id, user_id__in=participant_ids),
             locker_id=unlock_request.locker_id,
             ended_at__isnull=True,
             last_heartbeat_at__gte=now - timedelta(seconds=30),

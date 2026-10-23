@@ -3,6 +3,7 @@ from datetime import timedelta
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -12,7 +13,7 @@ from rest_framework.views import APIView
 from .authentication import MobileBearerAuthentication
 from .models import Device, EnrolledUser, Locker, LockerEnrollment, OtpChallenge, PresenceSession, UnlockRequest
 from .otp import decrypt_otp
-from .serializers import MobileDeviceRegistrationSerializer, MobileHeartbeatSerializer, MobileOtpVerifySerializer, MobilePresenceSerializer, MobileUnlockRequestSerializer, UnlockRequestSerializer
+from .serializers import MobileDeviceRegistrationSerializer, MobileHeartbeatSerializer, MobileLockerPresenceSerializer, MobileOtpVerifySerializer, MobilePresenceSerializer, MobileUnlockRequestSerializer, UnlockRequestSerializer
 from .providers import ProviderNotConfigured
 from .services import (
     expire_otp_challenge_if_needed,
@@ -162,16 +163,23 @@ class MobileUnlockRequestView(MobileIdentityMixin, APIView):
         locker = Locker.objects.filter(id=values["locker_id"], tenant=identity.tenant).first()
         if not locker or not _enrollment(identity, locker):
             return Response({"detail": "locker enrollment is required"}, status=status.HTTP_403_FORBIDDEN)
+        eligible = _eligible_second_parties(identity, locker)
         second_party = None
         if values.get("second_party_id"):
-            second_party = EnrolledUser.objects.filter(id=values["second_party_id"], tenant=identity.tenant, status="active").first()
-            if not second_party or not _enrollment(second_party, locker) or second_party.id == identity.id:
-                return Response({"detail": "second party is not enrolled for this locker"}, status=status.HTTP_400_BAD_REQUEST)
-        elif settings.DEV_MODE:
-            # SECURITY-PLACEHOLDER: local demo selects the first other enrolled person; production must use the reviewed policy/selection flow.
-            second_party = EnrolledUser.objects.filter(tenant=identity.tenant, status="active", locker_enrollments__locker=locker, locker_enrollments__revoked_at__isnull=True).exclude(id=identity.id).order_by("id").first()
+            second_party = eligible.filter(id=values["second_party_id"]).first()
+            if not second_party:
+                return Response({"detail": "selected second party is not eligible for this locker", "error_code": "second_party_not_eligible"}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            eligible_parties = list(eligible[:2])
+            if len(eligible_parties) == 1:
+                # Safe default: an unambiguous eligible person needs no extra
+                # selection step, including for clients that have not yet been
+                # updated to send second_party_id.
+                second_party = eligible_parties[0]
+            elif len(eligible_parties) > 1:
+                return Response({"detail": "choose an eligible second party before submitting this request", "error_code": "second_party_selection_required"}, status=status.HTTP_409_CONFLICT)
         if not second_party:
-            return Response({"detail": "an eligible second party is required"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "an eligible second party with an active enrolled device is required; ask an administrator to check locker enrollment and device approval", "error_code": "eligible_second_party_required"}, status=status.HTTP_409_CONFLICT)
 
         with transaction.atomic():
             unlock_request = UnlockRequest.objects.create(
@@ -211,14 +219,13 @@ class MobileUnlockRequestDetailView(MobileIdentityMixin, APIView):
         unlock_request = expire_unlock_request_if_needed(unlock_request.id)
         response = UnlockRequestSerializer(unlock_request).data
         cutoff = timezone.now() - timedelta(seconds=30)
-        present_user_ids = set(
-            PresenceSession.objects.filter(
-                request=unlock_request,
-                locker_id=unlock_request.locker_id,
-                ended_at__isnull=True,
-                last_heartbeat_at__gte=cutoff,
-            ).values_list("user_id", flat=True)
-        )
+        participants = [unlock_request.requester_id, unlock_request.second_party_id]
+        present_user_ids = set(PresenceSession.objects.filter(
+            Q(request=unlock_request) | Q(request__isnull=True, locker_id=unlock_request.locker_id, user_id__in=participants),
+            locker_id=unlock_request.locker_id,
+            ended_at__isnull=True,
+            last_heartbeat_at__gte=cutoff,
+        ).values_list("user_id", flat=True))
         response["presence"] = {
             "requester_connected": unlock_request.requester_id in present_user_ids,
             "second_party_connected": unlock_request.second_party_id in present_user_ids,
@@ -254,6 +261,29 @@ class MobilePresenceSessionView(MobileIdentityMixin, APIView):
         return Response({"session_id": str(presence.id), "last_heartbeat_at": now}, status=status.HTTP_201_CREATED)
 
 
+class MobileLockerPresenceSessionView(MobileIdentityMixin, APIView):
+    def post(self, request):
+        identity = self.identity()
+        if not identity:
+            return self.denied()
+        serializer = MobileLockerPresenceSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        values = serializer.validated_data
+        locker = Locker.objects.filter(id=values["locker_id"], tenant=identity.tenant).first()
+        if not locker or not _enrollment(identity, locker):
+            return Response({"detail": "locker enrollment is required for presence reporting"}, status=status.HTTP_403_FORBIDDEN)
+        now = timezone.now()
+        presence = PresenceSession.objects.create(
+            request=None,
+            user=identity,
+            locker=locker,
+            ble_session_id=values["ble_session_id"],
+            authenticated_at=now,
+            last_heartbeat_at=now,
+        )
+        return Response({"session_id": str(presence.id), "last_heartbeat_at": now}, status=status.HTTP_201_CREATED)
+
+
 class MobilePresenceHeartbeatView(MobileIdentityMixin, APIView):
     def patch(self, request, session_id):
         identity = self.identity()
@@ -271,7 +301,8 @@ class MobilePresenceHeartbeatView(MobileIdentityMixin, APIView):
         else:
             presence.save(update_fields=["last_heartbeat_at"])
         try:
-            maybe_issue_unlock_grant(presence.request_id)
+            if presence.request_id:
+                maybe_issue_unlock_grant(presence.request_id)
         except ProviderNotConfigured as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         return Response({"session_id": str(presence.id), "last_heartbeat_at": presence.last_heartbeat_at})
