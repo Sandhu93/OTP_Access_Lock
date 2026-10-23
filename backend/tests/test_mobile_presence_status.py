@@ -1,4 +1,5 @@
 from datetime import timedelta
+from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -10,6 +11,7 @@ from rest_framework.test import APIClient
 from core.demo_auth import issue_mobile_access_token
 from core.models import Device, EnrolledUser, Locker, LockerEnrollment, OtpChallenge, PresenceSession, Site, Tenant, UnlockRequest
 from core.otp import encrypt_otp
+from core.providers import ProviderNotConfigured
 
 
 TEST_SIGNING_KEY = "test-signing-key-that-is-long-enough-000"
@@ -173,3 +175,60 @@ def test_second_party_cannot_fetch_otp_until_both_people_have_fresh_presence():
     response_with_both_people = mobile_client(second_party, second_device).get(challenge_url)
     assert response_with_both_people.status_code == 200
     assert response_with_both_people.json()["otp"] == "123456"
+
+
+@pytest.mark.django_db
+@override_settings(AUTH_MODE="password_demo", DEMO_AUTH_SIGNING_KEY=TEST_SIGNING_KEY)
+def test_otp_verify_reports_unconfigured_grant_provider_without_consuming_attempt():
+    tenant = Tenant.objects.create(name="Grant provider tenant", slug="grant-provider-tenant")
+    site = Site.objects.create(tenant=tenant, name="Grant provider site")
+    locker = Locker.objects.create(tenant=tenant, site=site, name="Grant provider locker", hardware_id="LOCK-GRANT-PROVIDER")
+    requester = EnrolledUser.objects.create(tenant=tenant, display_name="Person A", employee_id="GRANT-A", status="active")
+    second_party = EnrolledUser.objects.create(tenant=tenant, display_name="Person B", employee_id="GRANT-B", status="active")
+    requester_device = Device.objects.create(tenant=tenant, user=requester, platform="android", public_key_fingerprint="grant-a", status="active")
+    second_device = Device.objects.create(tenant=tenant, user=second_party, platform="android", public_key_fingerprint="grant-b", status="active")
+    now = timezone.now()
+    unlock_request = UnlockRequest.objects.create(
+        tenant=tenant,
+        locker=locker,
+        requester=requester,
+        second_party=second_party,
+        status="approved_waiting_second_party",
+        reason="Grant provider test",
+        expires_at=now + timedelta(minutes=5),
+    )
+    challenge = OtpChallenge.objects.create(
+        request=unlock_request,
+        recipient=second_party,
+        otp_hash="hash",
+        otp_salt="salt",
+        otp_ciphertext=encrypt_otp("123456"),
+        delivery_status="delivered",
+        expires_at=now + timedelta(minutes=3),
+    )
+    for person, session_id in ((requester, "grant-a-session"), (second_party, "grant-b-session")):
+        PresenceSession.objects.create(
+            request=unlock_request,
+            user=person,
+            locker=locker,
+            ble_session_id=session_id,
+            authenticated_at=now,
+            last_heartbeat_at=now,
+        )
+
+    with patch("core.mobile_views.verify_otp_challenge", side_effect=ProviderNotConfigured("internal provider detail")):
+        response = mobile_client(second_party, second_device).post(
+            f"/api/v1/mobile/otp-challenges/{challenge.id}/verify",
+            {"otp": "123456"},
+            format="json",
+        )
+
+    assert response.status_code == 503
+    assert response.json()["error_code"] == "grant_provider_unavailable"
+    assert "locker remains locked" in response.json()["detail"]
+    assert "internal provider detail" not in response.json()["detail"]
+    challenge.refresh_from_db()
+    unlock_request.refresh_from_db()
+    assert challenge.attempts == 0
+    assert challenge.verified_at is None
+    assert unlock_request.status == "approved_waiting_second_party"
