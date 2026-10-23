@@ -16,6 +16,8 @@ Implemented as a foundation:
 - Secure OTP generation and hashing utility with one-minute TTL and two-attempt policy.
 - Provider interfaces that fail closed when OIDC, delivery, MQTT, and KMS/HSM configuration is
   absent.
+- Cloud KMS ES256 signing adapter; see `../infra/kms/README.md` for the Cloud Run and firmware
+  trust-key setup.
 
 Not production-ready yet:
 
@@ -23,7 +25,9 @@ Not production-ready yet:
 - PostgreSQL migrations/RLS deployment policy.
 - Mobile push/authenticated event delivery.
 - MQTT certificate provisioning and broker ACLs.
-- KMS/HSM signing and ESP32 grant verification.
+- Production OIDC/MFA, mobile delivery, MQTT device provisioning/ACLs, and customer-grade ESP32
+  provisioning remain incomplete. The demo deployment's KMS signer is not by itself a production
+  readiness claim.
 
 Never use the development tenant header or provider placeholders outside local development.
 

@@ -172,9 +172,36 @@ class SignedGrant:
 
 
 class KmsSigner:
-    # SECURITY-PLACEHOLDER: KMS/HSM signing adapter is not configured - must be replaced before production. See TODO_SECURITY_DEBT.md
     def sign_unlock_grant(self, claims: bytes):
-        raise ProviderNotConfigured("KMS/HSM signing provider is not configured")
+        if not settings.KMS_KEY_ID or not settings.UNLOCK_SIGNING_KEY_ID:
+            raise ProviderNotConfigured("Cloud KMS unlock-grant signing is not configured")
+        try:
+            from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+            from google.auth import default as google_auth_default
+            from google.auth.transport.requests import AuthorizedSession
+
+            credentials, _project_id = google_auth_default(
+                scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+            session = AuthorizedSession(credentials)
+            response = session.post(
+                f"https://cloudkms.googleapis.com/v1/{settings.KMS_KEY_ID}:asymmetricSign",
+                json={
+                    "digest": {
+                        "sha256": base64.b64encode(hashlib.sha256(claims).digest()).decode("ascii")
+                    }
+                },
+                timeout=10,
+            )
+            response.raise_for_status()
+            der_signature = base64.b64decode(response.json()["signature"], validate=True)
+            r_value, s_value = decode_dss_signature(der_signature)
+            signature = r_value.to_bytes(32, "big") + s_value.to_bytes(32, "big")
+            return SignedGrant(settings.UNLOCK_SIGNING_KEY_ID, signature)
+        except ProviderNotConfigured:
+            raise
+        except Exception as exc:
+            raise ProviderNotConfigured("Cloud KMS could not sign the unlock grant") from exc
 
 
 class DevelopmentSigner(KmsSigner):
