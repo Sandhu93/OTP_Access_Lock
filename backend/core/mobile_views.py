@@ -113,6 +113,36 @@ def _enrollment(identity, locker):
     return LockerEnrollment.objects.filter(locker=locker, user=identity, revoked_at__isnull=True).exists()
 
 
+def _eligible_second_parties(identity, locker):
+    return EnrolledUser.objects.filter(
+        tenant=identity.tenant,
+        status="active",
+        locker_enrollments__locker=locker,
+        locker_enrollments__revoked_at__isnull=True,
+        devices__status="active",
+    ).exclude(id=identity.id).distinct().order_by("display_name", "employee_id")
+
+
+class MobileEligibleSecondPartiesView(MobileIdentityMixin, APIView):
+    def get(self, request):
+        identity = self.identity()
+        if not identity:
+            return self.denied()
+        try:
+            locker_id = request.query_params.get("locker_id")
+            locker = Locker.objects.get(id=locker_id, tenant=identity.tenant)
+        except (Locker.DoesNotExist, ValidationError, ValueError, TypeError):
+            return Response({"detail": "locker is not available to this identity"}, status=status.HTTP_404_NOT_FOUND)
+        if not _enrollment(identity, locker):
+            return Response({"detail": "locker enrollment is required"}, status=status.HTTP_403_FORBIDDEN)
+        eligible = _eligible_second_parties(identity, locker)
+        return Response([{
+            "id": str(user.id),
+            "display_name": user.display_name,
+            "employee_id": user.employee_id,
+        } for user in eligible])
+
+
 class MobileUnlockRequestView(MobileIdentityMixin, APIView):
     def get(self, request):
         identity = self.identity()
