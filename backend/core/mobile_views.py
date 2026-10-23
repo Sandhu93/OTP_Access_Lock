@@ -209,7 +209,21 @@ class MobileUnlockRequestDetailView(MobileIdentityMixin, APIView):
         if not unlock_request:
             return Response({"detail": "request not found"}, status=status.HTTP_404_NOT_FOUND)
         unlock_request = expire_unlock_request_if_needed(unlock_request.id)
-        return Response(UnlockRequestSerializer(unlock_request).data)
+        response = UnlockRequestSerializer(unlock_request).data
+        cutoff = timezone.now() - timedelta(seconds=30)
+        present_user_ids = set(
+            PresenceSession.objects.filter(
+                request=unlock_request,
+                locker_id=unlock_request.locker_id,
+                ended_at__isnull=True,
+                last_heartbeat_at__gte=cutoff,
+            ).values_list("user_id", flat=True)
+        )
+        response["presence"] = {
+            "requester_connected": unlock_request.requester_id in present_user_ids,
+            "second_party_connected": unlock_request.second_party_id in present_user_ids,
+        }
+        return Response(response)
 
 
 class MobilePresenceSessionView(MobileIdentityMixin, APIView):
