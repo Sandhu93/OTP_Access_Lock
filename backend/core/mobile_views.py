@@ -24,6 +24,18 @@ from .services import (
 from .workflow import APPROVED_WAITING
 
 
+def _fresh_presence_user_ids(unlock_request, now=None):
+    cutoff = (now or timezone.now()) - timedelta(seconds=30)
+    participants = [unlock_request.requester_id, unlock_request.second_party_id]
+    return set(PresenceSession.objects.filter(
+        Q(request=unlock_request) | Q(request__isnull=True, locker_id=unlock_request.locker_id),
+        locker_id=unlock_request.locker_id,
+        ended_at__isnull=True,
+        last_heartbeat_at__gte=cutoff,
+        user_id__in=participants,
+    ).values_list("user_id", flat=True))
+
+
 class MobileIdentityMixin:
     authentication_classes = [MobileBearerAuthentication]
     permission_classes = [IsAuthenticated]
@@ -149,8 +161,28 @@ class MobileUnlockRequestView(MobileIdentityMixin, APIView):
         identity = self.identity()
         if not identity:
             return self.denied()
-        requests = list((UnlockRequest.objects.filter(tenant=identity.tenant, requester=identity) | UnlockRequest.objects.filter(tenant=identity.tenant, second_party=identity)).select_related("locker", "locker__site", "requester", "second_party").order_by("-requested_at")[:20])
-        requests = [expire_unlock_request_if_needed(item.id) for item in requests]
+        now = timezone.now()
+        # This endpoint feeds Person B's live-request picker. Keep it to valid,
+        # assigned approvals; scanning and locking each of 20 historical rows
+        # made this request scale linearly with history and led to concurrent
+        # 15-60 second mobile polls against Neon.
+        stale_ids = list(UnlockRequest.objects.filter(
+            tenant=identity.tenant,
+            second_party=identity,
+            status__in=["pending_review", APPROVED_WAITING, "presence_verifying", "token_issued"],
+        ).filter(Q(expires_at__lte=now) | Q(otp_challenge__expires_at__lte=now)).values_list("id", flat=True)[:20])
+        for request_id in stale_ids:
+            expire_unlock_request_if_needed(request_id)
+            challenge = OtpChallenge.objects.filter(request_id=request_id, expires_at__lte=now).only("id").first()
+            if challenge:
+                expire_otp_challenge_if_needed(challenge.id)
+        requests = UnlockRequest.objects.filter(
+            tenant=identity.tenant,
+            second_party=identity,
+            status=APPROVED_WAITING,
+            expires_at__gt=now,
+            otp_challenge__expires_at__gt=now,
+        ).select_related("locker", "locker__site", "requester", "second_party", "otp_challenge").order_by("-requested_at")[:20]
         return Response(UnlockRequestSerializer(requests, many=True).data)
 
     def post(self, request):
@@ -218,14 +250,7 @@ class MobileUnlockRequestDetailView(MobileIdentityMixin, APIView):
             return Response({"detail": "request not found"}, status=status.HTTP_404_NOT_FOUND)
         unlock_request = expire_unlock_request_if_needed(unlock_request.id)
         response = UnlockRequestSerializer(unlock_request).data
-        cutoff = timezone.now() - timedelta(seconds=30)
-        participants = [unlock_request.requester_id, unlock_request.second_party_id]
-        present_user_ids = set(PresenceSession.objects.filter(
-            Q(request=unlock_request) | Q(request__isnull=True, locker_id=unlock_request.locker_id, user_id__in=participants),
-            locker_id=unlock_request.locker_id,
-            ended_at__isnull=True,
-            last_heartbeat_at__gte=cutoff,
-        ).values_list("user_id", flat=True))
+        present_user_ids = _fresh_presence_user_ids(unlock_request)
         response["presence"] = {
             "requester_connected": unlock_request.requester_id in present_user_ids,
             "second_party_connected": unlock_request.second_party_id in present_user_ids,
@@ -334,6 +359,9 @@ class MobileOtpChallengeView(MobileIdentityMixin, APIView):
             return Response({"detail": "administrator approval is required before this challenge can be used", "error_code": "request_not_approved"}, status=status.HTTP_409_CONFLICT)
         if expire_otp_challenge_if_needed(challenge.id):
             return Response({"detail": "OTP challenge has expired", "error_code": "challenge_expired"}, status=status.HTTP_410_GONE)
+        present_user_ids = _fresh_presence_user_ids(request_state)
+        if request_state.requester_id not in present_user_ids or identity.id not in present_user_ids:
+            return Response({"detail": "both people must have a fresh locker-presence heartbeat before the OTP can be retrieved", "error_code": "presence_required"}, status=status.HTTP_409_CONFLICT)
         if challenge.delivery_status != "delivered":
             return Response({"detail": "challenge is not ready for retrieval"}, status=status.HTTP_409_CONFLICT)
         try:
@@ -362,6 +390,9 @@ class MobileOtpChallengeVerifyView(MobileIdentityMixin, APIView):
         request_state = expire_unlock_request_if_needed(challenge.request_id)
         if request_state.status != APPROVED_WAITING:
             return Response({"detail": "administrator approval is required before this challenge can be used", "error_code": "request_not_approved"}, status=status.HTTP_409_CONFLICT)
+        present_user_ids = _fresh_presence_user_ids(request_state)
+        if request_state.requester_id not in present_user_ids or identity.id not in present_user_ids:
+            return Response({"detail": "both people must remain connected while verifying the OTP", "error_code": "presence_required"}, status=status.HTTP_409_CONFLICT)
         serializer = MobileOtpVerifySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         verified = verify_otp_challenge(challenge.id, serializer.validated_data["otp"])

@@ -90,10 +90,14 @@ class UnlockRequestSerializer(serializers.ModelSerializer):
         return challenge.delivery_status if challenge else None
 
     def get_grant_id(self, obj):
+        if obj.status not in ("token_issued", "actuated"):
+            return None
         grant = SignedUnlockGrant.objects.filter(request=obj).only("id").first()
         return str(grant.id) if grant else None
 
     def get_grant_published_at(self, obj):
+        if obj.status not in ("token_issued", "actuated"):
+            return None
         grant = SignedUnlockGrant.objects.filter(request=obj).only("published_at").first()
         return grant.published_at if grant else None
 
